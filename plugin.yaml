@@ -1,0 +1,25 @@
+name: ball
+version: "0.1.0"
+description: "Whose turn is it? Tracks per chat thread whether the ball is with you or the AI, flags empty promises. A board, not a nag."
+author: "askclaw"
+license: MIT
+requires_hermes: ">=0.23.1"
+# Hooks registered by register(); validate's capability probe checks this matches exactly.
+provides_hooks:
+  - pre_gateway_dispatch
+  - post_llm_call
+  - on_human_input_request
+  - on_human_input_resolved
+  - agent_loop_stopped
+# No gated capabilities: ctx.llm (optional judge) runs on the active model with no overrides.
+capabilities: []
+requires_env: []
+config_schema:
+  llm_judge:
+    type: bool
+    default: false
+    description: "Ask the active model (via ctx.llm) to judge the ball after each turn. Off by default; runs in a background thread."
+  llm_judge_timeout:
+    type: int
+    default: 20
+    description: "Seconds before the LLM judge gives up and the heuristic result stands."
