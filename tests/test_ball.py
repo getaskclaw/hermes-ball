@@ -389,7 +389,7 @@ def test_register_matches_manifest(tmp_path):
     manifest = yaml.safe_load((bp.__file__ and __import__("pathlib").Path(bp.__file__).parent / "plugin.yaml").read_text())
     assert sorted(ctx.hooks) == sorted(manifest["provides_hooks"])
     assert list(ctx.commands) == ["ball"]
-    assert manifest["version"] == "0.1.0" and isinstance(manifest["version"], str)
+    assert manifest["version"] == "0.1.1" and isinstance(manifest["version"], str)
 
 
 # ── regressions: live bugs ──
