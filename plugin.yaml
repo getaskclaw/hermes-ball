@@ -27,3 +27,7 @@ config_schema:
     type: string
     default: auto
     description: "Output language: auto (Chinese if your last message or the note has CJK), zh, or en."
+  stale_days:
+    type: int
+    default: 7
+    description: "Hide chats with no activity for this many days from the board (0 = never). Hidden, not deleted; !ball forget deletes."

@@ -14,9 +14,11 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS threads (
     note TEXT NOT NULL DEFAULT '',
     updated TEXT NOT NULL,
     label TEXT,
-    lang TEXT
+    lang TEXT,
+    state TEXT
 )"""
-COLS = ("key", "ball", "since", "promise", "note", "updated", "label", "lang")
+COLS = ("key", "ball", "since", "promise", "note", "updated", "label", "lang", "state")
+STATES = ("asked", "replied", "working", "interrupted")
 _SEL = "SELECT " + ",".join(COLS) + " FROM threads"
 NOTE_MAX = 200
 SHORT_NOTE_MAX = 80  # notes are a short question, never the full reply
@@ -50,12 +52,23 @@ class Store:
                 conn.execute("ALTER TABLE threads ADD COLUMN label TEXT")
             if "lang" not in have:
                 conn.execute("ALTER TABLE threads ADD COLUMN lang TEXT")
+            if "state" not in have:
+                conn.execute("ALTER TABLE threads ADD COLUMN state TEXT")
+            # Backfill legacy rows once. Conservative: a truncated question that lost its '?' becomes
+            # 'asked' (still waiting), never 'replied'. Only the new column is written; nothing is dropped.
+            from .judge import legacy_state
+            legacy = conn.execute("SELECT key, ball, note FROM threads WHERE state IS NULL OR state NOT IN "
+                                  "('asked','replied','working','interrupted')").fetchall()
+            for key, ball, note in legacy:
+                conn.execute("UPDATE threads SET state=? WHERE key=?",
+                             (legacy_state({"ball": ball, "note": note}), key))
             conn.commit()
             self._conn = conn
         return self._conn
 
     def set(self, key: str, ball: str, *, promise: Optional[str] = None, note: str = "",
-            since: Optional[str] = None, label: Optional[str] = None, lang: Optional[str] = None) -> dict:
+            since: Optional[str] = None, label: Optional[str] = None, lang: Optional[str] = None,
+            state: Optional[str] = None) -> dict:
         """Upsert. ``since`` is kept when the ball does not change hands (unless given).
         ``label`` (human-readable thread name) and ``lang`` ('zh'/'en', from the user's last message) are kept
         when not given."""
@@ -74,14 +87,18 @@ class Store:
                 label = cur.get("label")
             if lang not in ("zh", "en"):
                 lang = cur.get("lang") if cur else None
+            if state not in STATES:
+                from .judge import legacy_state
+                state = "working" if ball == "ai" else legacy_state({"ball": ball, "note": note})
             db.execute(
-                "INSERT INTO threads(key,ball,since,promise,note,updated,label,lang) VALUES(?,?,?,?,?,?,?,?) "
+                "INSERT INTO threads(key,ball,since,promise,note,updated,label,lang,state) VALUES(?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET ball=excluded.ball, since=excluded.since, "
-                "promise=excluded.promise, note=excluded.note, updated=excluded.updated, label=excluded.label, lang=excluded.lang",
-                (key, ball, since, promise, note, ts, label, lang))
+                "promise=excluded.promise, note=excluded.note, updated=excluded.updated, label=excluded.label, lang=excluded.lang, "
+                "state=excluded.state",
+                (key, ball, since, promise, note, ts, label, lang, state))
             db.commit()
             return {"key": key, "ball": ball, "since": since, "promise": promise, "note": note, "updated": ts,
-                    "label": label, "lang": lang}
+                    "label": label, "lang": lang, "state": state}
 
     def set_if(self, key: str, expected_updated: str, ball: str, **kw) -> Optional[dict]:
         """Atomic compare-and-set: write only if the row's ``updated`` still equals the stamp."""

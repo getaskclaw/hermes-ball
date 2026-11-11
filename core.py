@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -116,6 +116,7 @@ def fmt_age(since: str, now: Optional[datetime] = None) -> str:
 _CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff]")
 _PLATFORM_SUFFIX = re.compile(r" \((?:[a-z_]+)\)(?= ·|$)")
 TOP = 3
+BALL_CMD = re.compile(r"^\s*[!/]ball(?=$|\s)(.*)$", re.I | re.S)
 
 L = {
     "zh": dict(your="🏀 轮到你", working="🤖 AI 在干活", stalled="⚠️ AI 卡住了", calm="不用管",
@@ -126,11 +127,12 @@ L = {
                work_line="🤖 {n} 个 AI 在干活", sep="、", chat="对话 {c}", short_replied="已回复",
                done_one="✅ 已答完 · {age} — 无需你处理", done_line="💤 {n} 个已答完，无需你处理",
                done_head="💤 {n} 个已答完，无需你处理", done_empty="💤 没有已答完的对话",
-               short_interrupted="已中断",
+               short_interrupted="已中断", stale_line="🗄 {n} 个 {d} 天无动静的对话已隐藏（在那个对话里 !ball forget 可删除）",
+               forgot="🗑 已从看板删除这个对话", forgot_none="这个对话没有记录",
                help="球在谁手里？— 告诉你哪些 AI 对话在等你。\n"
                     "!ball — 这个对话轮到谁\n!ball all — 等你的前 3 个\n!ball more — 全部等你的对话\n"
                     "!ball done — 已答完、无需你处理的对话\n"
-                    "!ball all hide — 隐藏对话名（方便截图）"),
+                    "!ball all hide — 隐藏对话名（方便截图）\n!ball forget — 从看板删除这个对话"),
     "en": dict(your="🏀 Your move", working="🤖 AI is working", stalled="⚠️ AI stalled", calm="nothing to do",
                asks="It asks: ", replied="It replied — your turn to read", interrupted="Interrupted — your call",
                stall_why="said \u201c{p}\u201d but went quiet · reply go to nudge it",
@@ -140,11 +142,12 @@ L = {
                work_line="🤖 {n} AI working", sep=", ", chat="Chat {c}", short_replied="replied",
                done_one="✅ Done · {age} — nothing needed", done_line="💤 {n} done, nothing needed",
                done_head="💤 {n} done, nothing needed", done_empty="💤 No done chats",
-               short_interrupted="interrupted",
+               short_interrupted="interrupted", stale_line="🗄 {n} idle >{d}d hidden (!ball forget in that chat removes it)",
+               forgot="🗑 Removed this chat from the board", forgot_none="Nothing tracked for this chat",
                help="Whose turn is it? — shows which AI chats are waiting on you.\n"
                     "!ball — this chat\n!ball all — top 3 waiting on you\n!ball more — every chat waiting on you\n"
                     "!ball done — chats the AI answered, nothing needed from you\n"
-                    "!ball all hide — hide chat names (for screenshots)"),
+                    "!ball all hide — hide chat names (for screenshots)\n!ball forget — remove this chat from the board"),
 }
 
 
@@ -176,23 +179,51 @@ def display_name(row: dict) -> str:
     return _PLATFORM_SUFFIX.sub("", label).strip()
 
 
-def short_note(row: dict, lang: str) -> str:
-    """What the waiting chat wants, always short. Old long notes go through the same extractor."""
-    note = (row.get("note") or "").strip()
-    t = L[lang]
-    low = note.lower()
-    if low.startswith("interrupted"):
-        return t["short_interrupted"]
+def row_state(row: dict) -> str:
+    """Stored classification (decided from the full reply before truncation); legacy rows fall back."""
+    st = row.get("state")
+    return st if st in ("asked", "replied", "working", "interrupted") else judge.legacy_state(row)
+
+
+def _asked_note(row: dict) -> str:
+    """The stored question. Never re-classified from the (possibly truncated) note."""
+    note = judge._LEGACY.sub("", (row.get("note") or "").strip())
     q = judge.extract_note(note)
-    return t["short_replied"] if q == judge.REPLIED else q
+    return q if q != judge.REPLIED else (judge._cut(judge._clean(note)) or "?")
+
+
+def short_note(row: dict, lang: str) -> str:
+    """What the waiting chat wants, always short."""
+    t = L[lang]
+    st = row_state(row)
+    if st == "interrupted":
+        return t["short_interrupted"]
+    return _asked_note(row) if st == "asked" else t["short_replied"]
 
 
 def is_done(row: dict) -> bool:
     """ball=human but the AI just answered and asked nothing: nothing is waiting on the user."""
-    if row.get("ball") != "human":
-        return False
-    note = (row.get("note") or "").strip()
-    return not note.lower().startswith("interrupted") and judge.extract_note(note) == judge.REPLIED
+    return row.get("ball") == "human" and row_state(row) == "replied"
+
+
+def _parse(ts: Any) -> Optional[datetime]:
+    try:
+        t = datetime.fromisoformat(str(ts))
+    except (TypeError, ValueError):
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def split_stale(rows: list, stale_days: float, now: Optional[datetime] = None) -> tuple:
+    """(fresh, stale): rows whose last update is older than stale_days are hidden (never deleted)."""
+    if not stale_days or stale_days <= 0:
+        return list(rows), []
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=stale_days)
+    fresh, stale = [], []
+    for r in rows:
+        t = _parse(r.get("updated")) or _parse(r.get("since"))
+        (stale if t is not None and t < cutoff else fresh).append(r)
+    return fresh, stale
 
 
 def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Optional[str] = None) -> str:
@@ -207,14 +238,13 @@ def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Option
         return f"{t['working']} · {age} — {t['calm']}"
     if is_done(row):
         return t["done_one"].format(age=age)
-    note = (row.get("note") or "").strip()
-    line2 = t["interrupted"] if note.lower().startswith("interrupted") else t["asks"] + judge.extract_note(note)
+    line2 = t["interrupted"] if row_state(row) == "interrupted" else t["asks"] + _asked_note(row)
     return f"{t['your']} · {age}\n{line2}"
 
 
 def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optional[str] = None,
                  full: bool = False, hide: bool = False, done: bool = False,
-                 show_done: bool = False) -> str:
+                 show_done: bool = False, stale: int = 0, stale_days: float = 0) -> str:
     """done=True: only the answered-nothing-needed chats; show_done=True: also list them after the waiting ones."""
     lang = lang or pick_lang("auto", rows)
     t = L[lang]
@@ -254,6 +284,8 @@ def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optiona
         out.extend(f"{i}. {name(r)} · {fmt_age(r['since'], now)}" for i, r in enumerate(finished, 1))
     elif finished:
         out.append(t["done_line"].format(n=len(finished)))
+    if stale:
+        out.append(t["stale_line"].format(n=stale, d=f"{stale_days:g}"))
     return "\n".join(out)
 
 
@@ -319,14 +351,22 @@ class Ball:
         source = getattr(event, "source", None)
         if source is None:
             return None
-        if is_command(getattr(event, "text", None)):
+        text = getattr(event, "text", None)
+        m = BALL_CMD.match(text) if isinstance(text, str) else None
+        if m and not (text.startswith("/") and text == text.lstrip()):
+            # A raw `!ball` (adapter did not rewrite it) or ` /ball` would reach the pending clarify
+            # text-intercept as free text and be consumed as the ANSWER (gateway/run_inbound.py:390-394 only
+            # skips text starting with "/"). Rewrite to the canonical slash form so the prompt stays pending
+            # and the command dispatches. State is untouched.
+            return {"action": "rewrite", "text": "/ball" + (m.group(1) or "")}
+        if is_command(text):
             # `/ball`, Matrix `!ball` (rewritten to `/ball` by the adapter) and every other slash/bang command
             # are control traffic, not a conversational turn: they must not move the ball, so `/ball` reports
             # the state as it was *before* the query.
             return None
-        text = getattr(event, "text", None)
         lang = ("zh" if has_cjk(text) else "en") if isinstance(text, str) and text.strip() else None
-        self.store.set(thread_key(source), "ai", note="you spoke", label=thread_label(source), lang=lang)
+        self.store.set(thread_key(source), "ai", note="you spoke", label=thread_label(source), lang=lang,
+                       state="working")
         return None  # never rewrite/skip the message
 
     @safe
@@ -336,7 +376,7 @@ class Ball:
             return None
         q = judge.extract_note(prompt or "")
         note = q if q != judge.REPLIED else judge._cut(f"{kind or 'input'}: {(prompt or '').strip()}".strip(": "))
-        self.store.set(tkey, "human", note=note)
+        self.store.set(tkey, "human", note=note, state="asked")  # a human-input prompt always asks
         return None
 
     @safe
@@ -344,7 +384,7 @@ class Ball:
         tkey = self._resolve(session_key, session_id)
         if not tkey:
             return None
-        self.store.set(tkey, "ai", note=f"{kind or 'input'} {outcome or 'resolved'}")
+        self.store.set(tkey, "ai", note=f"{kind or 'input'} {outcome or 'resolved'}", state="working")
         return None
 
     @safe
@@ -352,7 +392,7 @@ class Ball:
         tkey = self._resolve(session_key=session_key)
         if not tkey:
             return None
-        self.store.set(tkey, "human", note=f"interrupted: {reason or 'unknown'}")
+        self.store.set(tkey, "human", note=f"interrupted: {reason or 'unknown'}", state="interrupted")
         return None
 
     @safe
@@ -365,13 +405,20 @@ class Ball:
                         session_id, "known" if self._session_store is not None else "not yet seen")
             return None
         verdict = judge.heuristic(assistant_response or "")
-        row = self.store.set(tkey, verdict["ball"], promise=verdict["promise"], note=verdict["note"])
+        row = self.store.set(tkey, verdict["ball"], promise=verdict["promise"], note=verdict["note"],
+                             state=verdict["state"])
         if self._cfg("llm_judge", False) and getattr(self.ctx, "llm", None) is not None:
             t = threading.Thread(target=self._run_llm_judge, name="ball-judge", daemon=True,
                                  args=(tkey, assistant_response or "", row["updated"], verdict))
             t.start()
             return t  # return value of post_llm_call is ignored by Hermes; handy for tests
         return None
+
+    def _stale_days(self) -> float:
+        try:
+            return max(0.0, float(self._cfg("stale_days", 7)))
+        except (TypeError, ValueError):
+            return 7.0
 
     def _cfg(self, key, default):
         try:
@@ -392,11 +439,17 @@ class Ball:
             logger.info("ball: llm judge error", exc_info=True)
             res = None
         if res is None:
-            self.store.set_if(tkey, stamp, fallback["ball"], promise=fallback["promise"], note="judge failed")
+            self.store.set_if(tkey, stamp, fallback["ball"], promise=fallback["promise"], note="judge failed",
+                              state=fallback["state"])
             return
         # newer state (user spoke, interrupt...) wins: set_if is a no-op if the row moved on
+        if res["ball"] == "ai":
+            state = "working"
+        else:  # asked vs replied from the FULL reply text, never from the (short) note
+            state = "asked" if fallback["state"] == "asked" or judge.extract_note(text) != judge.REPLIED else "replied"
         self.store.set_if(tkey, stamp, res["ball"], promise=res["promise"] if res["ball"] == "ai" else None,
-                          note=res["note"] or fallback["note"])
+                          note=(fallback["note"] if state == "asked" and fallback["state"] == "asked"
+                                else res["note"] or fallback["note"]), state=state)
 
     # ── command ──
     @safe
@@ -411,11 +464,19 @@ class Ball:
         if sub in ("help", "?"):
             row = self.store.get(here) if here else None
             return L[pick_lang(setting, self.store.all(), row)]["help"]
+        if sub == "forget":  # explicit user command: the only path that deletes a row
+            if not here:
+                return L[pick_lang(setting, self.store.all())]["nothread"]
+            lang = pick_lang(setting, self.store.all(), self.store.get(here))
+            return L[lang]["forgot"] if self.store.delete(here) else L[lang]["forgot_none"]
         if sub in ("all", "board", "more", "done"):
-            rows = self.store.all()
-            here_row = next((r for r in rows if r["key"] == here), None)
-            return render_board(rows, lang=pick_lang(setting, rows, here_row), full=sub == "more", hide=hide,
-                                done=sub == "done", show_done=sub == "more" and "all" in words[1:])
+            all_rows = self.store.all()
+            stale_days = self._stale_days()
+            rows, stale = split_stale(all_rows, stale_days)
+            here_row = next((r for r in all_rows if r["key"] == here), None)
+            return render_board(rows, lang=pick_lang(setting, all_rows, here_row), full=sub == "more", hide=hide,
+                                done=sub == "done", show_done=sub == "more" and "all" in words[1:],
+                                stale=len(stale), stale_days=stale_days)
         if not here:
             return L[pick_lang(setting, self.store.all())]["nothread"]
         row = self.store.get(here)

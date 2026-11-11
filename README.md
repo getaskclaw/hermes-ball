@@ -24,6 +24,7 @@ Requires Hermes `>=0.23.1`. Restart the gateway to load it.
 | `!ball more` | every chat waiting on you (`!ball more all` also lists the done ones) |
 | `!ball done` | chats the AI answered without asking anything — nothing needed from you |
 | `!ball all hide`, `!ball more hide` | same, chat names replaced by Chat A/B/C (for screenshots) |
+| `!ball forget` | remove **this** chat's row from the board (the only command that deletes data) |
 | `!ball help` | short help |
 
 `!ball` in a chat:
@@ -84,10 +85,15 @@ Chat names come from the chat's public name (e.g. the Matrix room name); DMs sho
 | you send a message (`pre_gateway_dispatch`) | AI |
 | approval / clarify / sudo prompt (`on_human_input_request`) | you |
 | prompt answered (`on_human_input_resolved`) | AI |
-| turn ends (`post_llm_call`) | judged: question or decision ask → you; unfulfilled promise → AI + ⚠; otherwise you |
+| turn ends (`post_llm_call`) | judged: question or decision ask → you (*asked*); promise in the last 2 sentences → AI + ⚠; otherwise you (*replied* = done) |
 | interrupt, `/stop` (`agent_loop_stopped`) | you (`interrupted: <reason>`) |
 
 The turn-end judge is a deterministic phrase heuristic (English and Chinese). Optionally an LLM judge can refine it.
+The verdict is decided from the **full** reply and stored as `state` (`asked` / `replied` / `working` /
+`interrupted`); the short note is display-only, so truncating a long question never turns it into "Done".
+A question always beats a promise. Promise phrases (only counted in the final 2 sentences): `I'll report /
+update you / let you know / get back / follow up / check (and tell you) / look into`, `will post here`, `stand by`,
+… and `回头 / 稍后 / 马上 / 接下来 / 我去查 / 我会跟进` ….
 
 ## Configuration
 
@@ -99,6 +105,7 @@ plugins:
         language: auto          # auto | zh | en
         llm_judge: false        # default; true = ask the active model after each turn
         llm_judge_timeout: 20   # seconds; on timeout/bad JSON the heuristic stands, note = "judge failed"
+        stale_days: 7           # board hides chats with no activity for N days (0 = never); hidden, not deleted
 ```
 
 ## What is stored
@@ -106,7 +113,10 @@ plugins:
 One SQLite row per thread in `<HERMES_HOME>/plugin-data/ball/data.db` (WAL):
 `key` (`profile:platform:chat_id:thread_id`), `ball`, `since`, `promise` (matched phrase, ≤200 chars), `note`
 (≤80 chars: only the short question the AI asked, e.g. `Which file should I write to?`, or `replied` — never the full reply),
-`updated`, `label` (chat name), `lang` (`zh`/`en`, from your last message's script — not its text).
+`updated`, `label` (chat name), `lang` (`zh`/`en`, from your last message's script — not its text), `state`
+(`asked`/`replied`/`working`/`interrupted`). Older databases get the `state` column added in place; legacy rows are
+backfilled conservatively (anything not clearly a plain reply becomes `asked`, so it still shows as waiting).
+Rows are only deleted by `!ball forget`; `stale_days` only hides them from `!ball all/more/done`.
 **No transcripts, no message bodies.** The session→thread map lives only in memory.
 
 ## Network / LLM disclosure
@@ -131,6 +141,14 @@ One SQLite row per thread in `<HERMES_HOME>/plugin-data/ball/data.db` (WAL):
 - Ball maps a turn end (`post_llm_call` only carries a `session_id`) to a chat through the gateway's
   `session_store`, which it first receives with an inbound message. A reply that finishes right after Ball is
   installed/hot-loaded, before any message has arrived, is not recorded (logged at INFO as "turn not recorded").
+- Left/forgotten rooms: Hermes exposes no public plugin signal for "room left" or "session removed" on Matrix, so
+  Ball cannot drop those rows itself. They disappear from the board after `stale_days`; `!ball forget` in the chat
+  removes one for good (once you have left a room you cannot run it there; the row just stays hidden).
+- Pending clarify / question prompts: a raw `!ball` (or ` /ball` with leading spaces) is rewritten to `/ball` in
+  `pre_gateway_dispatch`, so the gateway's clarify text-intercept (which skips text starting with `/`) never takes
+  it as the answer. **Limit:** while the agent turn is running, a plugin command is not a built-in, so the
+  adapter's busy path neither bypasses the active session for it nor fires `pre_gateway_dispatch`; Hermes routes
+  `/ball` like any busy follow-up (steer/queue per `busy_input_mode`). Ball cannot intercept that path.
 - The heuristic is phrase-based and will misjudge sometimes; `/ball` is a hint, not a contract.
 
 ## Development

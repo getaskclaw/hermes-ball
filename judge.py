@@ -13,11 +13,14 @@ DECISION = re.compile(
     r"|给我|告诉我|你选|需你拍板|需要你拍板|你拍板|请提供|发我|你定",
     re.I)
 PROMISE = re.compile(
-    r"\b(i'?ll|i will|i'?m going to|let me) (report back|follow up|check|get back|look into|circle back|update you|keep you posted|monitor|ping you)"
-    r"|\bwill (follow up|report back|get back to you|update you)\b"
-    r"|\b(stand by|hang tight|working on it|in a (moment|minute|bit))\b"
-    r"|稍后|马上|接下来|待会|一会儿|随后|回头|我去(查|看|跑|试)|我会(跟进|汇报|回复|检查|继续)",
+    r"\b(?:i'?ll|i will|i'?m going to|i am going to|let me|we'?ll|we will)\s+(?:now\s+|then\s+|also\s+)?"
+    r"(?:report(?: back)?|post|update you|update (?:this|here)|let you know|get back|follow up|circle back"
+    r"|check and (?:tell|let|report|get back)|check|look into|keep you posted|monitor|ping you|send (?:you )?(?:the )?results)"
+    r"|\bwill (?:post (?:it |them |the \w+ )?(?:here|back)|report back|follow up|get back to you|update you)\b"
+    r"|\b(?:stand by|hang tight|working on it|in a (?:moment|minute|bit))\b"
+    r"|稍后|马上|接下来|待会|一会儿|随后|回头|我去(?:查|看|跑|试)|我会(?:跟进|汇报|回复|检查|继续|告诉你|同步)",
     re.I)
+PROMISE_SENTENCES = 2  # a promise only counts in the final sentences: earlier ones were usually kept
 
 
 def _last_line(text: str) -> str:
@@ -26,6 +29,12 @@ def _last_line(text: str) -> str:
 
 
 _SENT = re.compile(r"[^。！!？?.\n]*[。！!？?.\n]?")
+
+
+def _last_sentences(text: str, n: int) -> list:
+    protected = re.sub(r"\.(?=\S)", "\x00", (text or "").strip())
+    sents = [x.replace("\x00", ".").strip() for x in _SENT.findall(protected)]
+    return [x for x in sents if x.strip(" 。！？!?.")][-n:]
 
 
 def _asks_question(text: str, n: int = 2) -> bool:
@@ -81,23 +90,46 @@ def extract_note(text: str) -> str:
         return REPLIED
     if pick[-1] in "。.!！":
         pick = pick[:-1]
+    if len(pick) > NOTE_LEN and pick[-1] in "?？":  # keep the question mark visible after truncation
+        return pick[: NOTE_LEN - 2].rstrip() + "…" + pick[-1]
     return _cut(pick)
 
 
+ASKED, REPLIED_STATE, WORKING, INTERRUPTED = "asked", "replied", "working", "interrupted"
+
+
 def heuristic(text: str) -> dict:
-    """-> {"ball", "promise", "note"}. Question/decision ask -> human; promise w/o ask -> ai + promise."""
+    """-> {"ball", "promise", "note", "state"}. Decided from the FULL text, before any truncation.
+
+    Question/decision ask -> human/asked (a question always beats a promise); promise phrase in the last
+    PROMISE_SENTENCES sentences w/o ask -> ai/working + promise; else human/replied."""
     text = text or ""
     tail = text[-600:]
     last = _last_line(text)
     if not text.strip():
-        return {"ball": "human", "promise": None, "note": "empty reply"}
+        return {"ball": "human", "promise": None, "note": "empty reply", "state": REPLIED_STATE}
     if QUESTION_END.search(last) or _asks_question(tail) or DECISION.search(tail):
-        return {"ball": "human", "promise": None, "note": extract_note(text)}
-    m = PROMISE.search(tail)
-    if m:
-        return {"ball": "ai", "promise": m.group(0), "note": _cut(m.group(0))}
-    return {"ball": "human", "promise": None, "note": "replied"}
+        return {"ball": "human", "promise": None, "note": extract_note(text), "state": ASKED}
+    for sent in reversed(_last_sentences(tail, PROMISE_SENTENCES)):
+        m = PROMISE.search(sent)
+        if m:
+            return {"ball": "ai", "promise": m.group(0), "note": _cut(m.group(0)), "state": WORKING}
+    return {"ball": "human", "promise": None, "note": "replied", "state": REPLIED_STATE}
 
+
+def legacy_state(row: dict) -> str:
+    """State for rows written before the ``state`` column. A truncated legacy question may have lost its
+    '?', so anything that is not clearly a plain reply is treated as *asked* (never silently Done)."""
+    if row.get("ball") == "ai":
+        return WORKING
+    note = (row.get("note") or "").strip()
+    low = note.lower()
+    if low.startswith("interrupted"):
+        return INTERRUPTED
+    if low in ("", "replied", "empty reply", "judge failed", "you spoke") or low.endswith(("resolved", "approved",
+                                                                                          "denied", "timeout")):
+        return REPLIED_STATE
+    return ASKED
 
 JUDGE_PROMPT = (
     "You judge a chat thread's turn-taking. Given the assistant's final message, decide whose turn it is. "

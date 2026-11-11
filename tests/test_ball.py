@@ -94,7 +94,7 @@ def test_store_crud(store):
 def test_store_columns_only(store):
     store.set("k", "ai")
     cols = [c[1] for c in store._db().execute("PRAGMA table_info(threads)")]
-    assert cols == ["key", "ball", "since", "promise", "note", "updated", "label", "lang"]
+    assert cols == ["key", "ball", "since", "promise", "note", "updated", "label", "lang", "state"]
 
 
 def test_store_concurrency(dbpath):
@@ -397,7 +397,9 @@ def test_commands_do_not_move_ball(env, text):
     """BUG1: `!ball` (-> `/ball`) was counted as 'you spoke' and answered 'AI · 0s'."""
     env.store.set(TKEY, "human", note="replied", since="2026-11-11T00:19:12+00:00")
     before = env.store.get(TKEY)
-    assert dispatch(env, text) is None
+    res = dispatch(env, text)
+    # raw `!ball` is normalized to `/ball` (bug: answered a pending clarify); never skip, never move the ball
+    assert res is None or res == {"action": "rewrite", "text": "/ball"}
     assert env.store.get(TKEY) == before
     assert env.ball._session_store is env.ss  # commands still hand Ball the session_store
 
@@ -534,7 +536,7 @@ def test_pure_promise_is_ai(text):
 
 @_pt.mark.parametrize("text", ["The fix is in judge.py line 34.", "已完成，测试全部通过。"])
 def test_plain_answer_replied(text):
-    assert _h(text) == {"ball": "human", "promise": None, "note": "replied"}
+    assert _h(text) == {"ball": "human", "promise": None, "note": "replied", "state": "replied"}
 
 
 EXTRACT = [
@@ -551,7 +553,7 @@ EXTRACT = [
     ("", "replied"),
     ("要不要我顺便把文档也更新一下，以及把 README 里的所有示例全部重新跑一遍再贴上来？",
      "以及把 README 里的所有示例全部重新跑一遍再贴上来？"),
-    ("Q" * 60 + "?", "Q" * 39 + "…"),
+    ("Q" * 60 + "?", "Q" * 38 + "…?"),  # truncation keeps the '?' visible
 ]
 
 
@@ -623,3 +625,116 @@ def test_command_done_and_more_all(env):
         "💤 1 done, nothing needed"
     assert "Here" in env.ball.command("more all", source=SRC, session_key=env.skey, session_id="sid-1")
     assert "Here" not in env.ball.command("more", source=SRC, session_key=env.skey, session_id="sid-1")
+
+
+# ── regression: live-demo bugs ──
+@pytest.mark.parametrize("text,want", [
+    ("!ball", "/ball"), ("!ball all hide", "/ball all hide"), ("  /ball more", "/ball more"), ("!BALL", "/ball")])
+def test_raw_bang_ball_rewritten_so_clarify_never_consumes_it(env, text, want):
+    """BUG(clarify): raw `!ball` reached the clarify text-intercept and was taken as the answer.
+    The intercept skips text starting with '/', so Ball rewrites to the canonical slash form."""
+    env.store.set(TKEY, "human", note="Which port?", state="asked")
+    before = env.store.get(TKEY)
+    assert dispatch(env, text) == {"action": "rewrite", "text": want}
+    assert env.store.get(TKEY) == before
+
+
+@pytest.mark.parametrize("text", ["/ball", "/ball all", "!ballpark is fine", "ball?"])
+def test_canonical_or_non_ball_text_not_rewritten(env, text):
+    r = dispatch(env, text)
+    assert r is None
+
+
+def _age(store, key, days):
+    old = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    store._db().execute("UPDATE threads SET updated=?, since=? WHERE key=?", (old, old, key))
+    store._db().commit()
+
+
+def test_stale_rows_hidden_not_deleted(env):
+    env.store.set("p:matrix:!gone:", "human", note="Deploy now?", state="asked", label="Left room (matrix)")
+    env.store.set("p:matrix:!live:", "human", note="Merge it?", state="asked", label="Live room (matrix)")
+    _age(env.store, "p:matrix:!gone:", 8)
+    out = env.ball.command("all")
+    assert "Live room" in out and "Left room" not in out and "1 idle >7d hidden" in out
+    assert env.store.get("p:matrix:!gone:") is not None  # expiry only hides
+
+
+def test_stale_days_config(env):
+    env.store.set("p:matrix:!a:", "human", note="X?", state="asked", label="Room A (matrix)")
+    _age(env.store, "p:matrix:!a:", 3)
+    env.ball.ctx = NS(get_config=lambda k, d=None: {"stale_days": 2}.get(k, d), llm=None)
+    assert "Room A" not in env.ball.command("all")
+    env.ball.ctx = NS(get_config=lambda k, d=None: {"stale_days": 0}.get(k, d), llm=None)  # 0 = never hide
+    assert "Room A" in env.ball.command("all")
+
+
+def test_forget_deletes_only_this_thread(env):
+    env.store.set(TKEY, "human", note="X?", state="asked")
+    env.store.set("other", "human", note="Y?", state="asked")
+    assert "Removed" in env.ball.command("forget", source=SRC)
+    assert env.store.get(TKEY) is None and env.store.get("other") is not None
+    assert "Nothing tracked" in env.ball.command("forget", source=SRC)
+
+
+def test_long_question_stays_asked_after_truncation(env):
+    """BUG(truncation): a >40-char question lost its '?' in the note and then rendered as Done."""
+    reply = "I finished the analysis. Should I go ahead and also rewrite the migration script for the new schema"
+    reply += " and redeploy everything to staging tonight?"
+    v = judge.heuristic(reply)
+    assert v["state"] == "asked" and len(v["note"]) <= 40
+    dispatch(env, "hi")
+    env.ball.on_post_llm_call(session_id="sid-1", assistant_response=reply)
+    row = env.store.get(TKEY)
+    assert row["state"] == "asked" and not core.is_done(row)
+    assert "Done" not in core.render_one(row, lang="en")
+    assert "1 chat waiting" in core.render_board([row], lang="en")
+
+
+def test_legacy_rows_migrated_conservatively(dbpath):
+    conn = sqlite3.connect(dbpath)
+    conn.execute("CREATE TABLE threads (key TEXT PRIMARY KEY, ball TEXT NOT NULL, since TEXT NOT NULL, "
+                 "promise TEXT, note TEXT NOT NULL DEFAULT '', updated TEXT NOT NULL, label TEXT, lang TEXT)")
+    ts = "2026-11-11T00:00:00+00:00"
+    rows = [("trunc", "human", "Should I also rewrite the migration scr…"), ("rep", "human", "replied"),
+            ("int", "human", "interrupted: stop"), ("ai", "ai", "you spoke")]
+    for k, b, n in rows:
+        conn.execute("INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)", (k, b, ts, None, n, ts, None, None))
+    conn.commit(); conn.close()
+    st = bp.Store(lambda: sqlite3.connect(dbpath, check_same_thread=False))
+    got = {k: st.get(k)["state"] for k, _, _ in rows}
+    assert got == {"trunc": "asked", "rep": "replied", "int": "interrupted", "ai": "working"}
+    assert st.get("trunc")["note"] == "Should I also rewrite the migration scr…"  # data untouched
+    assert not core.is_done(st.get("trunc"))
+
+
+@pytest.mark.parametrize("text", [
+    "I'll report the findings here.",
+    "Starting the scan now. I'll update you when it finishes.",
+    "Kicked off the build. I will let you know once it passes.",
+    "I'll get back to you with numbers.",
+    "Will follow up after lunch.",
+    "I'll check and tell you.",
+    "Running it now; will post here when done.",
+    "我回头把结果发给你。",
+    "我去查一下日志。",
+    "接下来我会跑完整测试。",
+])
+def test_promise_detected(text):
+    v = judge.heuristic(text)
+    assert v["ball"] == "ai" and v["promise"] and v["state"] == "working", text
+
+
+@pytest.mark.parametrize("text", [
+    "I'll report the findings here. Which format do you want?",
+    "我稍后去查，要不要先重启？",
+])
+def test_question_beats_promise(text):
+    assert judge.heuristic(text)["state"] == "asked"
+
+
+def test_old_promise_not_in_last_two_sentences_is_replied():
+    text = ("I'll check the logs first. Found the bug in parser.py. Fixed it and added a test. "
+            "All 94 tests pass now.")
+    v = judge.heuristic(text)
+    assert v["ball"] == "human" and v["state"] == "replied"

@@ -16,6 +16,6 @@ def register(ctx):
     for name in HOOKS:
         ctx.register_hook(name, getattr(ball, name if name.startswith("on_") else "on_" + name))
     ctx.register_command("ball", ball.command,
-                         description="Which AI chats are waiting on you? `/ball`, `/ball all`, `/ball more`, `/ball help`",
-                         args_hint="[all|more|help] [hide]")
+                         description="Which AI chats are waiting on you? `/ball`, `/ball all`, `/ball more`, `/ball forget`, `/ball help`",
+                         args_hint="[all|more|done|forget|help] [hide]")
     return ball
