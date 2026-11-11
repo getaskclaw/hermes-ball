@@ -1,0 +1,88 @@
+{"text": "Fixed the CSS path and redeployed. Let me know if you have any questions.", "label": "replied", "lang": "en"}
+{"text": "Tests pass on main now. Feel free to reach out if anything breaks.", "label": "replied", "lang": "en"}
+{"text": "The report is attached. Happy to help with anything else.", "label": "replied", "lang": "en"}
+{"text": "Migration finished in 4 minutes. If you have any questions, just ask.", "label": "replied", "lang": "en"}
+{"text": "Cache cleared and the site loads again. Any questions?", "label": "replied", "lang": "en"}
+{"text": "I renamed the config key to timeout_s. Let me know if anything looks off.", "label": "replied", "lang": "en"}
+{"text": "Backups now run at 03:00 UTC. Let me know if you need anything else.", "label": "replied", "lang": "en"}
+{"text": "All 12 links are fixed. Let me know if there are any issues.", "label": "replied", "lang": "en"}
+{"text": "The draft is in docs/plan.md. Feel free to edit it directly.", "label": "replied", "lang": "en"}
+{"text": "Deployed v2.3 to staging. If anything breaks, ping me.", "label": "replied", "lang": "en"}
+{"text": "Here is the summary: three bugs fixed, one deferred to next sprint.", "label": "replied", "lang": "en"}
+{"text": "The answer is 42 ms median latency, measured over 1,000 requests.", "label": "replied", "lang": "en"}
+{"text": "Done — the cron job now skips weekends.", "label": "replied", "lang": "en"}
+{"text": "I updated the README and pushed the branch feature/login.", "label": "replied", "lang": "en"}
+{"text": "Your invoice total is 312.50 EUR including tax.", "label": "replied", "lang": "en"}
+{"text": "The function returns None when the file is missing; that is expected.", "label": "replied", "lang": "en"}
+{"text": "Let me know if you want me to tweak the colors.", "label": "replied", "lang": "en"}
+{"text": "Glad to help! The new logo is in assets/logo.svg.", "label": "replied", "lang": "en"}
+{"text": "Both servers are healthy. Anything else?", "label": "replied", "lang": "en"}
+{"text": "Restored the deleted note from yesterday's snapshot.", "label": "replied", "lang": "en"}
+{"text": "Let me know which option you prefer.", "label": "asked", "lang": "en"}
+{"text": "Should I delete the old drafts?", "label": "asked", "lang": "en"}
+{"text": "Do you want the dark theme or the light one?", "label": "asked", "lang": "en"}
+{"text": "Please confirm the new budget before I send it.", "label": "asked", "lang": "en"}
+{"text": "Can you approve the merge to main", "label": "asked", "lang": "en"}
+{"text": "Which one do you want: A, B or C?", "label": "asked", "lang": "en"}
+{"text": "I need your decision on the vendor before Friday.", "label": "asked", "lang": "en"}
+{"text": "Waiting for your go-ahead on the rollout.", "label": "asked", "lang": "en"}
+{"text": "Would you like me to schedule the meeting for Tuesday?", "label": "asked", "lang": "en"}
+{"text": "Your call: keep the old API or drop it.", "label": "asked", "lang": "en"}
+{"text": "Is 3 pm OK for the call?", "label": "asked", "lang": "en"}
+{"text": "Shall I also notify the team?", "label": "asked", "lang": "en"}
+{"text": "The fix is ready. Want me to deploy it now?", "label": "asked", "lang": "en"}
+{"text": "I found two candidates. Should I go with the cheaper one? Let me know if you have any questions.", "label": "asked", "lang": "en"}
+{"text": "Before I continue: what is the staging password policy?", "label": "asked", "lang": "en"}
+{"text": "Please choose a name for the new channel.", "label": "asked", "lang": "en"}
+{"text": "Do you want me to keep the logs, or let me know if you need anything else?", "label": "asked", "lang": "en"}
+{"text": "Which branch should I base this on? Happy to help either way.", "label": "asked", "lang": "en"}
+{"text": "I'll report back once the build finishes.", "label": "promised", "lang": "en"}
+{"text": "Running the full suite now; I'll post the results here.", "label": "promised", "lang": "en"}
+{"text": "I will follow up after the vendor replies.", "label": "promised", "lang": "en"}
+{"text": "Let me check the logs and get back to you.", "label": "promised", "lang": "en"}
+{"text": "Hang tight, the export takes a few minutes.", "label": "promised", "lang": "en"}
+{"text": "I'll keep you posted on the migration. Let me know if anything breaks meanwhile.", "label": "promised", "lang": "en"}
+{"text": "已改好并部署。如有问题告诉我。", "label": "replied", "lang": "zh"}
+{"text": "测试全部通过了。有问题随时告诉我。", "label": "replied", "lang": "zh"}
+{"text": "报告已发到你邮箱。如需调整格式再说。", "label": "replied", "lang": "zh"}
+{"text": "备份已恢复到昨天的版本。随时告诉我。", "label": "replied", "lang": "zh"}
+{"text": "链接都修好了，一共 12 个。有需要再找我。", "label": "replied", "lang": "zh"}
+{"text": "站点已经可以访问了。如有任何疑问，随时联系我。", "label": "replied", "lang": "zh"}
+{"text": "配置项已改名为 timeout_s。", "label": "replied", "lang": "zh"}
+{"text": "答案是中位延迟 42 毫秒。", "label": "replied", "lang": "zh"}
+{"text": "已把日志清理到只保留 7 天。", "label": "replied", "lang": "zh"}
+{"text": "新版本 v2.3 已上线到测试环境。有什么问题找我。", "label": "replied", "lang": "zh"}
+{"text": "翻译已经完成，放在 docs/zh.md 里。", "label": "replied", "lang": "zh"}
+{"text": "服务器都正常。还有其他问题吗？", "label": "replied", "lang": "zh"}
+{"text": "发票总额是 312.5 元，含税。", "label": "replied", "lang": "zh"}
+{"text": "已把定时任务改成周末跳过。如有问题请随时联系。", "label": "replied", "lang": "zh"}
+{"text": "图标已替换，效果见截图。有需要的话再叫我。", "label": "replied", "lang": "zh"}
+{"text": "这是总结：修了三个 bug，一个推迟到下个迭代。", "label": "replied", "lang": "zh"}
+{"text": "草稿已写好。如需修改可以直接编辑。", "label": "replied", "lang": "zh"}
+{"text": "数据库迁移用了 4 分钟，已完成。", "label": "replied", "lang": "zh"}
+{"text": "全部完成，没有报错。", "label": "replied", "lang": "zh"}
+{"text": "已删除重复的条目，共 5 条。", "label": "replied", "lang": "zh"}
+{"text": "要不要把旧草稿删掉？", "label": "asked", "lang": "zh"}
+{"text": "请确认新的预算后我再发出去。", "label": "asked", "lang": "zh"}
+{"text": "你决定用哪个供应商。", "label": "asked", "lang": "zh"}
+{"text": "深色还是浅色主题，你选。", "label": "asked", "lang": "zh"}
+{"text": "这个方案可以吗", "label": "asked", "lang": "zh"}
+{"text": "需要你拍板：保留旧接口还是删掉。", "label": "asked", "lang": "zh"}
+{"text": "请提供测试环境的账号。", "label": "asked", "lang": "zh"}
+{"text": "修复已经准备好，现在部署吗？", "label": "asked", "lang": "zh"}
+{"text": "是否需要同时通知团队", "label": "asked", "lang": "zh"}
+{"text": "我找到两个方案。用便宜的那个行吗？如有问题告诉我。", "label": "asked", "lang": "zh"}
+{"text": "告诉我你选哪个分支。", "label": "asked", "lang": "zh"}
+{"text": "等你确认后我就合并。", "label": "asked", "lang": "zh"}
+{"text": "下午三点开会方便吗？", "label": "asked", "lang": "zh"}
+{"text": "请选择新频道的名字。", "label": "asked", "lang": "zh"}
+{"text": "要不要也更新文档？有需要再找我。", "label": "asked", "lang": "zh"}
+{"text": "给我一下服务器的地址。", "label": "asked", "lang": "zh"}
+{"text": "你看呢", "label": "asked", "lang": "zh"}
+{"text": "这个改动请批准一下。", "label": "asked", "lang": "zh"}
+{"text": "我稍后把结果发到这里。", "label": "promised", "lang": "zh"}
+{"text": "正在跑全量测试，我会汇报结果。", "label": "promised", "lang": "zh"}
+{"text": "我去查一下日志，待会回复你。", "label": "promised", "lang": "zh"}
+{"text": "导出需要几分钟，马上好。", "label": "promised", "lang": "zh"}
+{"text": "我会跟进供应商的回复。如有问题告诉我。", "label": "promised", "lang": "zh"}
+{"text": "接下来我会继续迁移剩下的表。", "label": "promised", "lang": "zh"}

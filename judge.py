@@ -20,6 +20,38 @@ PROMISE = re.compile(
     r"|\b(?:stand by|hang tight|working on it|in a (?:moment|minute|bit))\b"
     r"|稍后|马上|接下来|待会|一会儿|随后|回头|我去(?:查|看|跑|试)|我会(?:跟进|汇报|回复|检查|继续|告诉你|同步)",
     re.I)
+# Courtesy/offer closers ("Let me know if you have any questions.") end a finished reply; they are not asks.
+_CL = r"[^.?!。？！,，;；\n]*"
+COURTESY = re.compile(
+    r"\b(?:let me know|tell me|ping me|reach out|shout)\s+if\s+(?:you\s+(?:have|hit|see|run into|need|want|'d like|would like)"
+    r"|there (?:are|is)|anything|something|any)" + _CL +
+    r"|\bfeel free\b" + _CL + r"|\b(?:happy|glad) to help\b" + _CL +
+    r"|\bif (?:you have |there are )?(?:any )?(?:other |more |further )?questions\b" + _CL +
+    r"|\bif (?:anything|something) (?:breaks|else|comes up|goes wrong|looks off)\b" + _CL +
+    r"|^\W*(?:any (?:other |more |further )?questions|anything else)\s*[?？]?" +
+    r"|如有(?:任何|其他)?(?:问题|疑问)" + _CL + r"|有(?:任何|什么)?(?:问题|疑问)(?:的话)?(?:随时)?(?:再)?(?:告诉|找|联系|问)我" + _CL +
+    r"|如需" + _CL + r"|随时(?:告诉|找|联系|问)我" + _CL + r"|有需要(?:的话)?再" + _CL + r"|还有(?:其他|别的)?(?:问题|需要)吗[?？]?",
+    re.I)
+# a sentence that carries one of these is a real ask even if it also contains a courtesy phrase
+STRONG_ASK = re.compile(r"\b(?:should i|shall i|which|do you want me to|can you confirm|please (?:confirm|approve|choose|decide))\b"
+                        r"|请确认|请批准|请选择|要不要|是否|你决定|拍板|哪个|哪一", re.I)
+
+
+def is_courtesy(sentence: str) -> bool:
+    s = (sentence or "").strip()
+    if not s or not COURTESY.search(s) or STRONG_ASK.search(s):
+        return False
+    rest = COURTESY.sub("", s)
+    return not DECISION.search(rest) and not re.search(r"[?？]", rest)
+
+
+def strip_courtesy(text: str) -> str:
+    """Drop courtesy-closer sentences; everything else is kept byte-for-byte."""
+    protected = re.sub(r"\.(?=\S)", "\x00", text or "")
+    parts = [x.replace("\x00", ".") for x in _SENT.findall(protected)]
+    return "".join(x if not is_courtesy(x.strip(" \n")) else ("\n" if x.endswith("\n") else " ") for x in parts)
+
+
 PROMISE_SENTENCES = 2  # a promise only counts in the final sentences: earlier ones were usually kept
 
 
@@ -104,6 +136,10 @@ def heuristic(text: str) -> dict:
     Question/decision ask -> human/asked (a question always beats a promise); promise phrase in the last
     PROMISE_SENTENCES sentences w/o ask -> ai/working + promise; else human/replied."""
     text = text or ""
+    if text.strip():
+        text = strip_courtesy(text)
+        if not text.strip():
+            return {"ball": "human", "promise": None, "note": "replied", "state": REPLIED_STATE}
     tail = text[-600:]
     last = _last_line(text)
     if not text.strip():

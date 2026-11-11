@@ -134,6 +134,7 @@ L = {
                write_fail="⚠️ Ball 自 {t} UTC 起无法保存（{err}，磁盘满了？）— 看板可能过时",
                read_fail="⚠️ Ball 读不到它的数据库（{err}）",
                short_interrupted="已中断", stale_line="🗄 {n} 个 {d} 天无动静的对话已隐藏（在那个对话里 !ball forget 可删除）",
+               hidden_here="🔒 这里隐藏了 {n} 个其他对话 — 在私聊里用 !ball all 查看",
                forgot="🗑 已从看板删除这个对话", forgot_none="这个对话没有记录",
                help="球在谁手里？— 告诉你哪些 AI 对话在等你。\n"
                     "!ball — 这个对话轮到谁\n!ball all — 等你的前 3 个\n!ball more — 全部等你的对话\n"
@@ -152,6 +153,7 @@ L = {
                write_fail="⚠️ Ball couldn't save since {t} UTC ({err}, disk full?) — board may be out of date",
                read_fail="⚠️ Ball couldn't read its database ({err})",
                short_interrupted="interrupted", stale_line="🗄 {n} idle >{d}d hidden (!ball forget in that chat removes it)",
+               hidden_here="🔒 {n} other chats hidden here — use !ball all in your DM",
                forgot="🗑 Removed this chat from the board", forgot_none="Nothing tracked for this chat",
                help="Whose turn is it? — shows which AI chats are waiting on you.\n"
                     "!ball — this chat\n!ball all — top 3 waiting on you\n!ball more — every chat waiting on you\n"
@@ -247,14 +249,29 @@ def is_quiet(row: dict, timeout_min: float = WORKING_TIMEOUT_MIN, now: Optional[
     return t is not None and t < (now or datetime.now(timezone.utc)) - timedelta(minutes=timeout_min)
 
 
+PROMISE_GRACE_MIN = 2
+
+
+def in_promise_grace(row: dict, grace_min: float = PROMISE_GRACE_MIN, now: Optional[datetime] = None) -> bool:
+    """A promise row younger than the grace period is the AI still working on it, not stalled. Display only."""
+    if not grace_min or grace_min <= 0 or row.get("ball") != "ai" or not row.get("promise"):
+        return False
+    t = _parse(row.get("updated")) or _parse(row.get("since"))
+    return t is not None and t > (now or datetime.now(timezone.utc)) - timedelta(minutes=grace_min)
+
+
+def is_stalled(row: dict, grace_min: float = PROMISE_GRACE_MIN, now: Optional[datetime] = None) -> bool:
+    return row.get("ball") == "ai" and bool(row.get("promise")) and not in_promise_grace(row, grace_min, now)
+
+
 def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Optional[str] = None,
-               working_timeout_min: float = WORKING_TIMEOUT_MIN) -> str:
+               working_timeout_min: float = WORKING_TIMEOUT_MIN, promise_grace_min: float = PROMISE_GRACE_MIN) -> str:
     lang = lang or pick_lang("auto", [], row)
     t = L[lang]
     if not row:
         return t["none"]
     age = fmt_age(row["since"], now)
-    if row["ball"] == "ai" and row.get("promise"):
+    if is_stalled(row, promise_grace_min, now):
         return f"{t['stalled']} · {age}\n" + t["stall_why"].format(p=judge._cut(row["promise"], 20))
     if is_quiet(row, working_timeout_min, now):
         return t["quiet"].format(age=fmt_age(row.get("updated") or row["since"], now))
@@ -269,18 +286,18 @@ def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Option
 def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optional[str] = None,
                  full: bool = False, hide: bool = False, done: bool = False,
                  show_done: bool = False, stale: int = 0, stale_days: float = 0,
-                 working_timeout_min: float = WORKING_TIMEOUT_MIN) -> str:
-    """done=True: only the answered-nothing-needed chats; show_done=True: also list them after the waiting ones."""
+                 working_timeout_min: float = WORKING_TIMEOUT_MIN, promise_grace_min: float = PROMISE_GRACE_MIN,
+                 hidden: int = 0) -> str:
+    """hidden: rows from other chats withheld in a group room (privacy); a pointer line is appended.
+    done=True: only the answered-nothing-needed chats; show_done=True: also list them after the waiting ones."""
     lang = lang or pick_lang("auto", rows)
     t = L[lang]
     human = sorted((r for r in rows if r["ball"] == "human"), key=lambda r: r["since"])
     waiting = [r for r in human if not is_done(r)]
     finished = [r for r in human if is_done(r)]
-    stalled = sorted((r for r in rows if r["ball"] == "ai" and (r.get("promise") or
-                                                                 is_quiet(r, working_timeout_min, now))),
-                     key=lambda r: r["since"])
-    working = [r for r in rows if r["ball"] == "ai" and not r.get("promise")
-               and not is_quiet(r, working_timeout_min, now)]
+    stalled = sorted((r for r in rows if is_stalled(r, promise_grace_min, now)
+                      or is_quiet(r, working_timeout_min, now)), key=lambda r: r["since"])
+    working = [r for r in rows if r["ball"] == "ai" and r not in stalled]
     names: dict[str, str] = {}
 
     def name(r):
@@ -291,11 +308,12 @@ def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optiona
             names[r["key"]] = t["chat"].format(c=chr(65 + i) if i < 26 else str(i + 1))
         return names[r["key"]]
 
+    tail = [t["hidden_here"].format(n=hidden)] if hidden else []
     if done:
         if not finished:
-            return t["done_empty"]
+            return "\n".join([t["done_empty"]] + tail)
         return "\n".join([t["done_head"].format(n=len(finished))] +
-                         [f"{i}. {name(r)} · {fmt_age(r['since'], now)}" for i, r in enumerate(finished, 1)])
+                         [f"{i}. {name(r)} · {fmt_age(r['since'], now)}" for i, r in enumerate(finished, 1)] + tail)
 
     out = [t["head"].format(n=len(waiting), s="" if len(waiting) == 1 else "s") if waiting else t["empty"]]
     shown = waiting if full else waiting[:TOP]
@@ -314,7 +332,7 @@ def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optiona
         out.append(t["done_line"].format(n=len(finished)))
     if stale:
         out.append(t["stale_line"].format(n=stale, d=f"{stale_days:g}"))
-    return "\n".join(out)
+    return "\n".join(out + tail)
 
 
 class Ball:
@@ -454,6 +472,20 @@ class Ball:
         except (TypeError, ValueError):
             return float(WORKING_TIMEOUT_MIN)
 
+    def _promise_grace(self) -> float:
+        try:
+            return max(0.0, float(self._cfg("promise_grace_min", PROMISE_GRACE_MIN)))
+        except (TypeError, ValueError):
+            return float(PROMISE_GRACE_MIN)
+
+    def _group_scoped(self, source) -> bool:
+        """Board in a group/channel/thread room shows only that room unless board_in_groups is 'all'.
+        DMs and sources without a chat_type (CLI, tests) see the full board."""
+        chat_type = _s(getattr(source, "chat_type", None)).lower() if source is not None else ""
+        if chat_type in ("", "dm"):
+            return False
+        return str(self._cfg("board_in_groups", "here")).strip().lower() != "all"
+
     def _cfg(self, key, default):
         try:
             v = self.ctx.get_config(key, default) if self.ctx is not None else default
@@ -520,15 +552,20 @@ class Ball:
             return L[lang]["forgot"] if self.store.delete(here) else L[lang]["forgot_none"]
         if sub in ("all", "board", "more", "done"):
             all_rows = self.store.all()
+            here_row = next((r for r in all_rows if r["key"] == here), None)
+            hidden = 0
+            if self._group_scoped(source):  # privacy: other rooms' labels/questions never shown in a group
+                hidden = sum(1 for r in all_rows if r["key"] != here)
+                all_rows = [here_row] if here_row else []
             stale_days = self._stale_days()
             rows, stale = split_stale(all_rows, stale_days)
-            here_row = next((r for r in all_rows if r["key"] == here), None)
             return render_board(rows, lang=pick_lang(setting, all_rows, here_row), full=sub == "more", hide=hide,
                                 done=sub == "done", show_done=sub == "more" and "all" in words[1:],
                                 stale=len(stale), stale_days=stale_days,
-                                working_timeout_min=self._working_timeout())
+                                working_timeout_min=self._working_timeout(),
+                                promise_grace_min=self._promise_grace(), hidden=hidden)
         if not here:
             return L[pick_lang(setting, self.store.all())]["nothread"]
         row = self.store.get(here)
         return render_one(row, lang=pick_lang(setting, self.store.all() if not row else [], row),
-                          working_timeout_min=self._working_timeout())
+                          working_timeout_min=self._working_timeout(), promise_grace_min=self._promise_grace())

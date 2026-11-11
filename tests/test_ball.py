@@ -829,3 +829,103 @@ def test_write_failure_banner_zh(store):
     ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="你好"))
     store.write_failure = (datetime(2026, 1, 1, 9, 5, tzinfo=timezone.utc), "disk I/O error")
     assert ball.command("", source=SRC).startswith("⚠️ Ball 自 09:05 UTC 起无法保存（disk I/O error，磁盘满了？）— 看板可能过时\n")
+
+
+# ── courtesy closers are not asks ──
+@pytest.mark.parametrize("text,state", [
+    ("Fixed the CSS path and redeployed. Let me know if you have any questions.", "replied"),
+    ("已改好并部署。如有问题告诉我。", "replied"),
+    ("Feel free to reach out if anything breaks.", "replied"),
+    ("Any questions?", "replied"),
+    ("有问题随时告诉我。", "replied"),
+    ("Let me know which option you prefer", "asked"),
+    ("Should I delete the old drafts?", "asked"),
+    ("Found two. Should I use the cheaper one? Let me know if you have any questions.", "asked"),
+    ("Do you want me to keep the logs, or let me know if you need anything else?", "asked"),
+    ("要不要也更新文档？有需要再找我。", "asked"),
+    ("I'll report back soon. Let me know if anything breaks.", "working"),
+    ("Want me to deploy? I'll report back after.", "asked"),  # question beats promise
+])
+def test_courtesy_closers(text, state):
+    assert judge.heuristic(text)["state"] == state
+
+
+def test_courtesy_note_picks_real_ask():
+    v = judge.heuristic("Should I merge it? Let me know if you have any questions.")
+    assert v["note"] == "Should I merge it?"
+
+
+def test_endings_fixture_precision_recall():
+    import json
+    import pathlib
+    rows = [json.loads(l) for l in (pathlib.Path(__file__).parent / "fixtures" / "endings.jsonl").read_text(
+        encoding="utf-8").splitlines() if l.strip()]
+    assert len(rows) >= 80
+    assert 0.35 <= sum(r["lang"] == "zh" for r in rows) / len(rows) <= 0.65
+    m = {"asked": "asked", "replied": "replied", "working": "promised"}
+    got = [m[judge.heuristic(r["text"])["state"]] for r in rows]
+    tp = sum(g == "asked" and r["label"] == "asked" for g, r in zip(got, rows))
+    fp = sum(g == "asked" and r["label"] != "asked" for g, r in zip(got, rows))
+    fn = sum(g != "asked" and r["label"] == "asked" for g, r in zip(got, rows))
+    precision, recall = tp / (tp + fp), tp / (tp + fn)
+    acc = sum(g == r["label"] for g, r in zip(got, rows)) / len(rows)
+    print(f"endings n={len(rows)} asked precision={precision:.3f} recall={recall:.3f} 3-way accuracy={acc:.3f}")
+    assert precision >= 0.95 and recall >= 0.90
+
+
+# ── promise grace ──
+def test_promise_grace_shows_working(env):
+    now = datetime.now(timezone.utc)
+    fresh = {"key": "k", "ball": "ai", "promise": "I'll report back", "since": now.isoformat(),
+             "updated": now.isoformat(), "note": "", "state": "working"}
+    old_ts = (now - timedelta(minutes=5)).isoformat()
+    old = dict(fresh, since=old_ts, updated=old_ts)
+    assert core.render_one(fresh, now=now, lang="en").startswith("🤖 AI is working")
+    assert core.render_one(old, now=now, lang="en").startswith("⚠️ AI stalled")
+    assert core.render_one(fresh, now=now, lang="en", promise_grace_min=0).startswith("⚠️ AI stalled")
+    assert "stalled" not in core.render_board([fresh], now=now, lang="en")
+    assert "1 AI stalled" in core.render_board([old], now=now, lang="en")
+
+
+# ── privacy: group rooms only see their own row ──
+def _grp(chat_id, chat_type="group"):
+    return NS(platform="matrix", chat_id=chat_id, thread_id=None, profile=None, chat_name="R" + chat_id,
+              chat_type=chat_type)
+
+
+def _two_rooms(env):
+    a, b = _grp("!a"), _grp("!b")
+    for src, q in ((a, "Should I merge A?"), (b, "Secret plan for B?")):
+        env.ball.on_pre_gateway_dispatch(event=NS(text="hi", source=src), session_store=env.ss)
+        env.store.set(core.thread_key(src), "human", note=q, state="asked")
+    return a, b
+
+
+@pytest.mark.parametrize("sub", ["all", "more", "done", "more all"])
+def test_group_board_hides_other_rooms(env, sub):
+    a, _ = _two_rooms(env)
+    out = env.ball.command(sub, source=a)
+    assert "Secret plan" not in out and "R!b" not in out
+    assert "1 other chats hidden here — use !ball all in your DM" in out
+    if sub in ("all", "more"):
+        assert "Should I merge A?" in out
+
+
+def test_dm_and_cli_board_show_everything(env):
+    _two_rooms(env)
+    for src in (_grp("!dm", "dm"), None):
+        out = env.ball.command("all", source=src)
+        assert "Secret plan" in out and "Should I merge A?" in out and "hidden here" not in out
+
+
+def test_board_in_groups_all_opt_out(env):
+    a, _ = _two_rooms(env)
+    env.ball.ctx = FakeCtx(config={"board_in_groups": "all"})
+    out = env.ball.command("all", source=_grp("!a", "channel"))
+    assert "Secret plan" in out and "hidden here" not in out
+
+
+def test_group_board_zh_hidden_line(env):
+    a, _ = _two_rooms(env)
+    env.ball.ctx = FakeCtx(config={"language": "zh"})
+    assert "🔒 这里隐藏了 1 个其他对话 — 在私聊里用 !ball all 查看" in env.ball.command("all", source=a)

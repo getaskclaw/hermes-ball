@@ -35,3 +35,11 @@ config_schema:
     type: int
     default: 30
     description: "Show a 'working' chat as quiet/maybe stopped after this many minutes without a turn end (e.g. gateway restarted mid-turn). 0 = off. Display only."
+  promise_grace_min:
+    type: int
+    default: 2
+    description: "A promise ('I'll report back') younger than this many minutes shows as AI working, not stalled. 0 = off. Display only."
+  board_in_groups:
+    type: string
+    default: here
+    description: "In a group/channel room, '!ball all/more/done' shows only that room (here) or every chat (all). DMs and CLI always show every chat."

@@ -104,6 +104,11 @@ The verdict is decided from the **full** reply and stored as `state` (`asked` / 
 A question always beats a promise. Promise phrases (only counted in the final 2 sentences): `I'll report /
 update you / let you know / get back / follow up / check (and tell you) / look into`, `will post here`, `stand by`,
 … plus the Chinese equivalents (e.g. "later", "right away", "I will check") ….
+Courtesy closers are not asks: "Let me know if you have any questions", "Feel free to reach out", "Happy to help",
+"Any questions?" and their Chinese equivalents ("if there is a problem, tell me") are ignored, so a finished reply
+ending with one shows as *replied*. A real ask in the same reply still wins ("Should I merge? Let me know if...").
+A promise younger than `promise_grace_min` (default 2) shows as "AI working", not stalled.
+Measured on `tests/fixtures/endings.jsonl` (88 hand-labelled fictional endings written by the author, ~half English / ~half Chinese, not real-world data): *asked* precision 1.00, recall 1.00 — the set was written while tuning the rules, so expect lower on real chats.
 
 ## Configuration
 
@@ -117,6 +122,8 @@ plugins:
         llm_judge_timeout: 20   # seconds; on timeout/bad JSON the heuristic stands, note = "judge failed"
         stale_days: 7           # board hides chats with no activity for N days (0 = never); hidden, not deleted
         working_timeout_min: 30 # "AI working" older than this shows as "AI quiet — may have stopped" (0 = off)
+        promise_grace_min: 2    # a promise younger than this shows as "AI working", not stalled (0 = off)
+        board_in_groups: here   # here = in a group/channel room, !ball all/more/done shows only that room; all = every chat
 ```
 
 ## What is stored
@@ -129,6 +136,10 @@ One SQLite row per thread in `<HERMES_HOME>/plugin-data/ball/data.db` (WAL):
 backfilled conservatively (anything not clearly a plain reply becomes `asked`, so it still shows as waiting).
 Rows are only deleted by `!ball forget`; `stale_days` only hides them from `!ball all/more/done`.
 **No transcripts, no message bodies.** The session→thread map lives only in memory.
+
+**Privacy in group rooms:** with the default `board_in_groups: here`, `!ball all/more/done` in a group or channel
+shows only that room's row plus "N other chats hidden here — use !ball all in your DM", so other rooms' names and
+questions are never posted where other people can read them. DMs and the CLI show the full board.
 
 ## Network / LLM disclosure
 
