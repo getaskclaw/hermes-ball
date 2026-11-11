@@ -951,3 +951,27 @@ def test_forget_stale_deletes_only_hidden_rows(env):
     out = env.ball.command("forget stale")
     assert "Deleted 1" in out
     assert env.store.get("p:matrix:!a:") is None and env.store.get("p:matrix:!b:") is not None
+
+
+def test_telegram_dm_topic_turn_end_after_hot_reload_maps_via_state_db(store, _isolated_state_db):
+    """Live bug: hot reload ("Re-wired plugin handlers") gave a fresh Ball with no session_store; the Telegram
+    DM-topic turn end (and notifier-woken turns that never fire pre_gateway_dispatch) was logged 'turn not
+    recorded' and the row stayed ball=ai/working. The persisted session origin must map it."""
+    import json
+    import sqlite3
+    sid, tkey = "20261111_111929_49280fc9", "default:telegram:6534796624:276872"
+    src = NS(platform="telegram", chat_id="6534796624", thread_id="276872", profile=None, chat_type="dm")
+    con = sqlite3.connect(_isolated_state_db)
+    con.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, origin_json TEXT)")
+    con.execute("INSERT INTO sessions VALUES (?,?,?)", (sid, "telegram", json.dumps(
+        {"platform": "telegram", "chat_id": "6534796624", "chat_type": "dm", "thread_id": "276872"})))
+    con.execute("INSERT INTO sessions VALUES ('sub-1','subagent',NULL)")
+    con.commit(); con.close()
+    old = bp.Ball(store, FakeCtx())
+    old.on_pre_gateway_dispatch(event=NS(text="run it", source=src), gateway=object(), session_store=None)
+    assert store.get(tkey)["state"] == "working"
+    fresh = bp.Ball(store, FakeCtx())  # hot reload: no session_store, no inbound since
+    fresh.on_post_llm_call(session_id=sid, assistant_response="Done — the unit finished.")
+    assert store.get(tkey)["ball"] == "human"
+    fresh.on_post_llm_call(session_id="sub-1", assistant_response="x")  # subagent: no origin, no row
+    assert [r["key"] for r in store.all()] == [tkey]

@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 import logging
 import os
 import re
+import sqlite3
 import threading
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -381,11 +384,42 @@ class Ball:
             logger.debug("ball: %s failed", method, exc_info=True)
             return None
 
+    @staticmethod
+    def _state_db_path() -> Path:
+        return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "state.db"
+
+    def _from_state_db(self, session_id) -> Optional[str]:
+        """Fallback when no live session_store maps ``session_id``: after a plugin hot-reload the new Ball
+        has none until the next pre_gateway_dispatch, and Telegram turns woken by internal notifiers
+        (kanban / watch-pattern) never fire it. The persisted session row's ``origin_json`` is the same
+        SessionSource the gateway recorded, so it yields the same thread key. Read-only; non-chat
+        sessions (subagent/cron: no origin) map to nothing."""
+        p = self._state_db_path()
+        if not session_id or not p.exists():
+            return None
+        try:
+            con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=1)
+            try:
+                row = con.execute("SELECT origin_json FROM sessions WHERE id = ?", (str(session_id),)).fetchone()
+            finally:
+                con.close()
+            o = json.loads(row[0]) if row and row[0] else None
+        except Exception:
+            logger.debug("ball: state.db lookup failed", exc_info=True)
+            return None
+        if not isinstance(o, dict) or not o.get("platform") or not o.get("chat_id"):
+            return None
+        tkey = thread_key(SimpleNamespace(profile=o.get("profile"), platform=o.get("platform"),
+                                          chat_id=o.get("chat_id"), thread_id=o.get("thread_id")))
+        self._learn(tkey, session_id=session_id)
+        return tkey
+
     def _resolve(self, session_key=None, session_id=None) -> Optional[str]:
         t = (self.by_session_key.get(str(session_key)) if session_key else None) \
             or self._lookup("lookup_by_session_key", session_key) \
             or (self.by_session_id.get(str(session_id)) if session_id else None) \
-            or self._lookup("lookup_by_session_id", session_id)
+            or self._lookup("lookup_by_session_id", session_id) \
+            or self._from_state_db(session_id)
         if t:
             self._learn(t, session_key=session_key, session_id=session_id)
         return t

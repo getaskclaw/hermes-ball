@@ -31,3 +31,11 @@ def store(tmp_path):
 @pytest.fixture
 def dbpath(tmp_path):
     return tmp_path / "ball.db"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state_db(tmp_path, monkeypatch):
+    """Never let Ball's state.db fallback read the real ~/.hermes/state.db during tests."""
+    p = tmp_path / "state.db"
+    monkeypatch.setattr(bp.Ball, "_state_db_path", staticmethod(lambda: p))
+    return p
