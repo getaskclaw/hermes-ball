@@ -389,7 +389,7 @@ def test_register_matches_manifest(tmp_path):
     manifest = yaml.safe_load((bp.__file__ and __import__("pathlib").Path(bp.__file__).parent / "plugin.yaml").read_text())
     assert sorted(ctx.hooks) == sorted(manifest["provides_hooks"])
     assert list(ctx.commands) == ["ball"]
-    assert manifest["version"] == "0.1.1" and isinstance(manifest["version"], str)
+    assert manifest["version"] == "0.1.2" and isinstance(manifest["version"], str)
 
 
 # ── regressions: live bugs ──
@@ -975,3 +975,14 @@ def test_telegram_dm_topic_turn_end_after_hot_reload_maps_via_state_db(store, _i
     assert store.get(tkey)["ball"] == "human"
     fresh.on_post_llm_call(session_id="sub-1", assistant_response="x")  # subagent: no origin, no row
     assert [r["key"] for r in store.all()] == [tkey]
+
+
+def test_state_db_schema_change_is_shown_not_silent(store, _isolated_state_db):
+    import sqlite3
+    con = sqlite3.connect(_isolated_state_db)
+    con.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)")  # future schema without origin_json
+    con.commit(); con.close()
+    b = bp.Ball(store, FakeCtx())
+    b.on_post_llm_call(session_id="s-x", assistant_response="Done.")
+    out = b.command("all")
+    assert "can't read Hermes session origins" in out

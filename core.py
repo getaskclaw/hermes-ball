@@ -137,6 +137,7 @@ L = {
                quiet="⚠️ AI {age} 没动静 — 可能已停止（重启？）· 回一句 go 催它",
                write_fail="⚠️ Ball 自 {t} UTC 起无法保存（{err}，磁盘满了？）— 看板可能过时",
                read_fail="⚠️ Ball 读不到它的数据库（{err}）",
+               origin_fail="⚠️ 自 {t} UTC 起 Ball 无法读取 Hermes 会话来源（{err}），部分回合可能漏记",
                short_interrupted="已中断", forgot_stale="🗑 已删除 {n} 个隐藏的闲置对话", forget_stale_dm="请在私聊里发 !ball forget stale", stale_line="🗄 {n} 个 {d} 天无动静的对话已隐藏（!ball forget stale 可删除）",
                hidden_here="🔒 这里隐藏了 {n} 个其他对话 — 在私聊里用 !ball all 查看",
                forgot="🗑 已从看板删除这个对话", forgot_none="这个对话没有记录",
@@ -156,6 +157,7 @@ L = {
                quiet="⚠️ AI quiet {age} — may have stopped (restart?) · send \"go\" to nudge it",
                write_fail="⚠️ Ball couldn't save since {t} UTC ({err}, disk full?) — board may be out of date",
                read_fail="⚠️ Ball couldn't read its database ({err})",
+               origin_fail="⚠️ Since {t} UTC Ball can't read Hermes session origins ({err}); some turns may be missed",
                short_interrupted="interrupted", forgot_stale="🗑 Deleted {n} hidden idle chats", forget_stale_dm="Run !ball forget stale in your DM", stale_line="🗄 {n} idle >{d}d hidden (!ball forget stale deletes them)",
                hidden_here="🔒 {n} other chats hidden here — use !ball all in your DM",
                forgot="🗑 Removed this chat from the board", forgot_none="Nothing tracked for this chat",
@@ -404,8 +406,10 @@ class Ball:
             finally:
                 con.close()
             o = json.loads(row[0]) if row and row[0] else None
-        except Exception:
-            logger.debug("ball: state.db lookup failed", exc_info=True)
+        except Exception as e:  # e.g. a future Hermes schema change: say so on the board, don't fail silently
+            if getattr(self, "origin_failure", None) is None:
+                logger.warning("ball: state.db origin lookup failed (%s); some turn-ends may be missed", e)
+                self.origin_failure = (datetime.now(timezone.utc), type(e).__name__)
             return None
         if not isinstance(o, dict) or not o.get("platform") or not o.get("chat_id"):
             return None
@@ -568,6 +572,10 @@ class Ball:
         if fail and out and sub in ("", "all", "board", "more", "done"):
             lang = "zh" if has_cjk(out) else "en"
             out = L[lang]["write_fail"].format(t=fail[0].strftime("%H:%M"), err=fail[1]) + "\n" + out
+        ofail = getattr(self, "origin_failure", None)
+        if ofail and out and sub in ("", "all", "board", "more", "done"):
+            lang = "zh" if has_cjk(out) else "en"
+            out = L[lang]["origin_fail"].format(t=ofail[0].strftime("%H:%M"), err=ofail[1]) + "\n" + out
         return out
 
     def _command(self, words, source, session_id, session_key):
