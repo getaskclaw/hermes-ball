@@ -104,7 +104,10 @@ Ball stores one row per chat in `<HERMES_HOME>/plugin-data/ball/data.db`:
 - the AI's short question (up to 80 characters) or the promise phrase it matched (up to 200)
 - the language to reply in
 
-It never stores your messages or the full AI reply. By default (`board_in_groups: here`), `!ball all` in a group
+It never stores your messages or the full AI reply.
+
+Outside its own file, Ball reads only Hermes' in-process session routing and, read-only, the session's origin
+(platform, chat, thread) from Hermes' own `state.db` when a reply arrives right after a plugin reload. By default (`board_in_groups: here`), `!ball all` in a group
 room shows only that room, so other chats' names and questions aren't posted where others can read them.
 Setting it to `all` shows every chat everywhere.
 
