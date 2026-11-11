@@ -54,6 +54,7 @@ def thread_label(source) -> str:
     """Human-readable name from public SessionSource fields; never the raw chat id.
 
     chat_name (room/channel/group display name) > DM (user_name or 'DM') > platform · #hash(chat_id).
+    Thread suffix: chat_topic (e.g. Telegram forum topic name) if known, else thread #hash.
     """
     platform = _s(getattr(source, "platform", None)) or "?"
     name = _s(getattr(source, "chat_name", None)).strip()
@@ -67,7 +68,9 @@ def thread_label(source) -> str:
         label = f"{platform} · {_short_hash(_s(getattr(source, 'chat_id', None)))}"
     tid = _s(getattr(source, "thread_id", None))
     if tid:
-        label += f" · thread {_short_hash(tid)}"
+        # chat_topic is untrusted display text: collapse newlines/whitespace runs.
+        topic = " ".join(_s(getattr(source, "chat_topic", None)).split())
+        label += f" · {_trunc(topic, 40)}" if topic else f" · thread {_short_hash(tid)}"
     return label
 
 

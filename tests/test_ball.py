@@ -403,3 +403,25 @@ def test_legacy_db_migrates_label_column(dbpath):
     assert rows[0]["note"] == "asked: q" and rows[0]["label"] is None
     board = core.render_board(rows)
     assert "matrix · #" in board and "!old" not in board
+
+
+def _topic_src(topic):
+    return NS(platform="telegram", chat_id="-100", chat_name="Grp", chat_type="group", thread_id="42",
+              chat_topic=topic)
+
+
+def test_thread_label_topic_name():
+    assert core.thread_label(_topic_src("Release planning")) == "Grp (telegram) · Release planning"
+    long = core.thread_label(_topic_src("x" * 80))
+    assert long.endswith("…") and len(long.split(" · ")[-1]) == 40
+
+
+@pytest.mark.parametrize("topic", ["", "   ", "\n\t", None])
+def test_thread_label_blank_topic_falls_back_to_hash(topic):
+    assert core.thread_label(_topic_src(topic)) == f"Grp (telegram) · thread {core._short_hash('42')}"
+
+
+def test_thread_label_topic_newline_collapsed():
+    lab = core.thread_label(_topic_src("  evil\n\nfake row\r\n  x  "))
+    assert lab == "Grp (telegram) · evil fake row x"
+    assert "\n" not in lab and "\r" not in lab
