@@ -116,7 +116,8 @@ def fmt_age(since: str, now: Optional[datetime] = None) -> str:
     return f"{secs // 86400}d"
 
 
-_CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff]")
+_CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+_KANA = re.compile(r"[\u3040-\u30ff]")  # Japanese text also uses Han; kana means "not Chinese"
 _PLATFORM_SUFFIX = re.compile(r" \((?:[a-z_]+)\)(?= ·|$)")
 TOP = 3
 BALL_CMD = re.compile(r"^\s*[!/]ball(?=$|\s)(.*)$", re.I | re.S)
@@ -133,37 +134,37 @@ L = {
                quiet="⚠️ AI {age} 没动静 — 可能已停止（重启？）· 回一句 go 催它",
                write_fail="⚠️ Ball 自 {t} UTC 起无法保存（{err}，磁盘满了？）— 看板可能过时",
                read_fail="⚠️ Ball 读不到它的数据库（{err}）",
-               short_interrupted="已中断", stale_line="🗄 {n} 个 {d} 天无动静的对话已隐藏（在那个对话里 !ball forget 可删除）",
+               short_interrupted="已中断", forgot_stale="🗑 已删除 {n} 个隐藏的闲置对话", forget_stale_dm="请在私聊里发 !ball forget stale", stale_line="🗄 {n} 个 {d} 天无动静的对话已隐藏（!ball forget stale 可删除）",
                hidden_here="🔒 这里隐藏了 {n} 个其他对话 — 在私聊里用 !ball all 查看",
                forgot="🗑 已从看板删除这个对话", forgot_none="这个对话没有记录",
                help="球在谁手里？— 告诉你哪些 AI 对话在等你。\n"
                     "!ball — 这个对话轮到谁\n!ball all — 等你的前 3 个\n!ball more — 全部等你的对话\n"
                     "!ball done — 已答完、无需你处理的对话\n"
-                    "!ball all hide — 隐藏对话名（方便截图）\n!ball forget — 从看板删除这个对话"),
+                    "!ball all hide — 隐藏对话名（方便截图）\n!ball forget — 从看板删除这个对话\n!ball forget stale — 删除所有已隐藏的闲置对话"),
     "en": dict(your="🏀 Your move", working="🤖 AI is working", stalled="⚠️ AI stalled", calm="nothing to do",
                asks="It asks: ", replied="It replied — your turn to read", interrupted="Interrupted — your call",
-               stall_why="said \u201c{p}\u201d but went quiet · reply go to nudge it",
+               stall_why="said \u201c{p}\u201d but went quiet · send \"go\" to nudge it",
                none="🏀 Nothing tracked here yet: Ball starts once Hermes replies in this chat. To see every chat, send !ball all", nothread="🏀 Not a chat. Try !ball all",
                head="🏀 {n} chat{s} waiting on you", empty="✅ No chats waiting on you",
-               more="…{n} more: !ball more", stall_line="⚠️ {n} AI stalled: {names} — reply go there",
+               more="…{n} more: !ball more", stall_line="⚠️ {n} AI stalled: {names} — send \"go\" there",
                work_line="🤖 {n} AI working", sep=", ", chat="Chat {c}", short_replied="replied",
                done_one="✅ Done · {age} — nothing needed", done_line="💤 {n} done, nothing needed",
                done_head="💤 {n} done, nothing needed", done_empty="💤 No done chats",
-               quiet="⚠️ AI quiet {age} — may have stopped (restart?) · reply go to nudge it",
+               quiet="⚠️ AI quiet {age} — may have stopped (restart?) · send \"go\" to nudge it",
                write_fail="⚠️ Ball couldn't save since {t} UTC ({err}, disk full?) — board may be out of date",
                read_fail="⚠️ Ball couldn't read its database ({err})",
-               short_interrupted="interrupted", stale_line="🗄 {n} idle >{d}d hidden (!ball forget in that chat removes it)",
+               short_interrupted="interrupted", forgot_stale="🗑 Deleted {n} hidden idle chats", forget_stale_dm="Run !ball forget stale in your DM", stale_line="🗄 {n} idle >{d}d hidden (!ball forget stale deletes them)",
                hidden_here="🔒 {n} other chats hidden here — use !ball all in your DM",
                forgot="🗑 Removed this chat from the board", forgot_none="Nothing tracked for this chat",
                help="Whose turn is it? — shows which AI chats are waiting on you.\n"
                     "!ball — this chat\n!ball all — top 3 waiting on you\n!ball more — every chat waiting on you\n"
                     "!ball done — chats the AI answered, nothing needed from you\n"
-                    "!ball all hide — hide chat names (for screenshots)\n!ball forget — remove this chat from the board"),
+                    "!ball all hide — hide chat names (for screenshots)\n!ball forget — remove this chat from the board\n!ball forget stale — delete all hidden idle chats"),
 }
 
 
 def has_cjk(s: Any) -> bool:
-    return bool(isinstance(s, str) and _CJK.search(s))
+    return bool(isinstance(s, str) and _CJK.search(s) and not _KANA.search(s))
 
 
 def row_lang(row: Optional[dict]) -> Optional[str]:
@@ -545,7 +546,14 @@ class Ball:
         if sub in ("help", "?"):
             row = self.store.get(here) if here else None
             return L[pick_lang(setting, self.store.all(), row)]["help"]
-        if sub == "forget":  # explicit user command: the only path that deletes a row
+        if sub == "forget" and "stale" in words[1:]:  # explicit: delete every row hidden by stale_days
+            lang = pick_lang(setting, self.store.all(), self.store.get(here) if here else None)
+            if self._group_scoped(source):  # never touch other rooms' rows from a group room
+                return L[lang]["forget_stale_dm"]
+            _, stale = split_stale(self.store.all(), self._stale_days())
+            n = sum(1 for r in stale if self.store.delete(r["key"]))
+            return L[lang]["forgot_stale"].format(n=n)
+        if sub == "forget":  # explicit user command: delete this chat's row
             if not here:
                 return L[pick_lang(setting, self.store.all())]["nothread"]
             lang = pick_lang(setting, self.store.all(), self.store.get(here))

@@ -1,3 +1,4 @@
+import sys
 import re
 import sqlite3
 import threading
@@ -284,7 +285,7 @@ def test_render_one():
     assert core.render_one({"ball": "ai", "since": _iso(120), "promise": "马上", "note": "马上"}, NOW) == \
         "⚠️ AI 卡住了 · 2h\n说了「马上」但没动静 · 回一句 go 催它"
     assert core.render_one({"ball": "ai", "since": _iso(5), "promise": "I'll check", "note": ""}, NOW) == \
-        "⚠️ AI stalled · 5m\nsaid \u201cI'll check\u201d but went quiet · reply go to nudge it"
+        "⚠️ AI stalled · 5m\nsaid \u201cI'll check\u201d but went quiet · send \"go\" to nudge it"
     assert core.render_one({"ball": "human", "since": _iso(1), "promise": None, "note": "replied", "lang": "zh"},
                            NOW) == "✅ 已答完 · 1m — 无需你处理"
     assert "nothing tracked" in core.render_one(None).lower()
@@ -341,7 +342,7 @@ def test_board_empty_and_english():
     out = core.render_board(rows, NOW)
     print("\n--- !ball all (en) ---\n" + out)
     assert out.splitlines() == ["🏀 1 chat waiting on you", "1. Ball · 1h — Should I deploy main now?",
-                                "⚠️ 1 AI stalled: Ops — reply go there"]
+                                "⚠️ 1 AI stalled: Ops — send \"go\" there"]
 
 
 def test_board_legacy_long_notes_render_short():
@@ -756,7 +757,7 @@ def test_old_working_row_renders_quiet(store):
     _age_row(store, k, 45)
     before = store.get(k)
     out = ball.command("", source=SRC)
-    assert out == "⚠️ AI quiet 45m — may have stopped (restart?) · reply go to nudge it"
+    assert out == "⚠️ AI quiet 45m — may have stopped (restart?) · send \"go\" to nudge it"
     board = ball.command("all", source=SRC)
     assert "⚠️ 1 AI stalled:" in board and "AI working" not in board
     assert store.get(k) == before  # display only, no DB writes
@@ -935,3 +936,18 @@ def test_none_message_points_to_all():
     from ball_plugin.core import L
     assert "!ball all" in L["en"]["none"] and "Hermes replies" in L["en"]["none"]
     assert "!ball all" in L["zh"]["none"]
+
+
+def test_japanese_is_not_chinese():
+    has_cjk = sys.modules[bp.__name__ + ".core"].has_cjk
+    assert has_cjk("这个文件要删吗")
+    assert not has_cjk("このファイルを削除しますか")
+
+
+def test_forget_stale_deletes_only_hidden_rows(env):
+    env.store.set("p:matrix:!a:", "human", note="Old?", state="asked")
+    env.store.set("p:matrix:!b:", "human", note="New?", state="asked")
+    _age(env.store, "p:matrix:!a:", 30)
+    out = env.ball.command("forget stale")
+    assert "Deleted 1" in out
+    assert env.store.get("p:matrix:!a:") is None and env.store.get("p:matrix:!b:") is not None
