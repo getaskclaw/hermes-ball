@@ -311,3 +311,55 @@ def test_register_matches_manifest(tmp_path):
     assert sorted(ctx.hooks) == sorted(manifest["provides_hooks"])
     assert list(ctx.commands) == ["ball"]
     assert manifest["version"] == "0.1.0" and isinstance(manifest["version"], str)
+
+
+# ── regressions: live bugs ──
+@pytest.mark.parametrize("text", ["/ball", "/ball all", "!ball", "  /stop", "/new", "!help x"])
+def test_commands_do_not_move_ball(env, text):
+    """BUG1: `!ball` (-> `/ball`) was counted as 'you spoke' and answered 'AI · 0s'."""
+    env.store.set(TKEY, "human", note="replied", since="2026-11-11T00:19:12+00:00")
+    before = env.store.get(TKEY)
+    assert dispatch(env, text) is None
+    assert env.store.get(TKEY) == before
+    assert env.ball._session_store is env.ss  # commands still hand Ball the session_store
+
+
+def test_bang_ball_reports_state_before_query(env):
+    env.store.set(TKEY, "human", note="replied", since="2026-11-11T00:19:12+00:00")
+    dispatch(env, "/ball")  # what the Matrix adapter turns `!ball` into
+    out = env.ball.command("", source=SRC, session_key=env.skey, session_id="sid-1")
+    assert out.startswith("🏀 Ball: you · ") and "replied" in out and "you spoke" not in out
+
+
+def test_command_detection_is_strict():
+    for t in ("/ball", "!ball", "/x_y"):
+        assert core.is_command(t)
+    for t in ("", None, "/", "!", "! wow", "/ tmp", "hello /ball", "!!", "?", 42, "/123"):
+        assert not core.is_command(t)
+
+
+def test_plain_messages_still_move_ball(env):
+    env.store.set(TKEY, "human", note="replied")
+    dispatch(env, "so?")
+    assert env.store.get(TKEY)["ball"] == "ai"
+
+
+def test_same_holder_keeps_since_on_new_user_message(env):
+    """Documented: since = when the ball last changed hands, not the latest message."""
+    dispatch(env, "first")
+    since = env.store.get(TKEY)["since"]
+    dispatch(env, "second")
+    r = env.store.get(TKEY)
+    assert r["since"] == since and r["note"] == "you spoke"
+
+
+def test_turn_end_after_hot_load_is_logged_not_silent(env, caplog):
+    """BUG2: plugin hot-loaded mid-turn -> no session_store yet -> turn end unmapped, previously DEBUG-only."""
+    import logging
+    with caplog.at_level(logging.INFO, logger="hermes_plugins.ball"):
+        env.ball.on_post_llm_call(session_id="sid-1", assistant_response="done")
+    assert env.store.all() == []
+    assert any("not yet seen" in r.getMessage() for r in caplog.records)
+    dispatch(env, "/ball")  # first inbound (even a command) teaches the store; next turn end maps
+    env.ball.on_post_llm_call(session_id="sid-1", assistant_response="done")
+    assert env.store.get(TKEY)["ball"] == "human"

@@ -45,6 +45,12 @@ def thread_key(source) -> str:
                      _s(getattr(source, "chat_id", None)), _s(getattr(source, "thread_id", None))])
 
 
+def is_command(text: Any) -> bool:
+    """True for gateway commands (`/x ...`, or a raw `!x` if a platform did not rewrite it)."""
+    t = (text or "").lstrip() if isinstance(text, str) else ""
+    return len(t) > 1 and t[0] in "/!" and (t[1].isalpha() or t[1] == "_")
+
+
 def fmt_age(since: str, now: Optional[datetime] = None) -> str:
     try:
         t = datetime.fromisoformat(since)
@@ -152,6 +158,11 @@ class Ball:
         source = getattr(event, "source", None)
         if source is None:
             return None
+        if is_command(getattr(event, "text", None)):
+            # `/ball`, Matrix `!ball` (rewritten to `/ball` by the adapter) and every other slash/bang command
+            # are control traffic, not a conversational turn: they must not move the ball, so `/ball` reports
+            # the state as it was *before* the query.
+            return None
         self.store.set(thread_key(source), "ai", note="you spoke")
         return None  # never rewrite/skip the message
 
@@ -184,7 +195,10 @@ class Ball:
     def on_post_llm_call(self, session_id=None, assistant_response=None, **_):
         tkey = self._resolve(session_id=session_id)
         if not tkey:
-            logger.debug("ball: post_llm_call for unmapped session_id %s", session_id)
+            # INFO, not DEBUG: an unmapped turn end silently leaves the row stale (e.g. right after a hot
+            # load, before any inbound message has handed Ball the gateway's session_store).
+            logger.info("ball: post_llm_call for unmapped session_id %s (session_store %s) — turn not recorded",
+                        session_id, "known" if self._session_store is not None else "not yet seen")
             return None
         verdict = judge.heuristic(assistant_response or "")
         row = self.store.set(tkey, verdict["ball"], promise=verdict["promise"], note=verdict["note"])

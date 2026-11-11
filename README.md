@@ -68,6 +68,13 @@ One SQLite row per thread in `<HERMES_HOME>/plugin-data/ball/data.db` (WAL):
 - Tested against Matrix semantics (`!ball`); other platforms should work but are untested.
 - The empty-promise flag is a flag, not enforcement — Ball never wakes the agent up or nudges anyone.
 - Turn ends on non-gateway surfaces (CLI/TUI) are ignored: there is no chat thread to attach them to.
+- Commands (`/ball`, Matrix `!ball`, any `/x` or `!x`) never move the ball; `/ball` shows the state as it was
+  before you asked.
+- `since` is when the ball last **changed hands**. Another message from the same holder (e.g. you writing twice
+  while it is with the AI) does not reset it — the age answers "how long has it been with them".
+- Ball maps a turn end (`post_llm_call` only carries a `session_id`) to a chat through the gateway's
+  `session_store`, which it first receives with an inbound message. A reply that finishes right after Ball is
+  installed/hot-loaded, before any message has arrived, is not recorded (logged at INFO as "turn not recorded").
 - The heuristic is phrase-based and will misjudge sometimes; `/ball` is a hint, not a contract.
 
 ## Development
