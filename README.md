@@ -93,7 +93,7 @@ The verdict is decided from the **full** reply and stored as `state` (`asked` / 
 `interrupted`); the short note is display-only, so truncating a long question never turns it into "Done".
 A question always beats a promise. Promise phrases (only counted in the final 2 sentences): `I'll report /
 update you / let you know / get back / follow up / check (and tell you) / look into`, `will post here`, `stand by`,
-… and `回头 / 稍后 / 马上 / 接下来 / 我去查 / 我会跟进` ….
+… plus the Chinese equivalents (e.g. "later", "right away", "I will check") ….
 
 ## Configuration
 
