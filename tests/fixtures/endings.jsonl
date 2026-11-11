@@ -86,3 +86,18 @@
 {"text": "导出需要几分钟，马上好。", "label": "promised", "lang": "zh"}
 {"text": "我会跟进供应商的回复。如有问题告诉我。", "label": "promised", "lang": "zh"}
 {"text": "接下来我会继续迁移剩下的表。", "label": "promised", "lang": "zh"}
+{"text": "I opened the PR. Please reply with the branch name you want it merged into.", "label": "asked", "lang": "en"}
+{"text": "Two options: 1) roll back now, 2) wait for the patch. Reply 1 or 2.", "label": "asked", "lang": "en"}
+{"text": "Config is staged on all hosts. Say go and I'll restart the services.", "label": "asked", "lang": "en"}
+{"text": "构建已就绪。回我一个字「发」我就上线。", "label": "asked", "lang": "zh"}
+{"text": "方案写好了，需你拍板：先迁移还是先清理。", "label": "asked", "lang": "zh"}
+{"text": "Does the staging URL work for you? If not, I'll dig into the proxy logs.", "label": "asked", "lang": "en"}
+{"text": "The reviewer is running now. I'll wait for its verdict.", "label": "promised", "lang": "en"}
+{"text": "Backfill kicked off on the worker. Once the canary is back I'll post the diff.", "label": "promised", "lang": "en"}
+{"text": "Six jobs are queued.\n\nThen I’ll decide whether the old ticket can close.", "label": "promised", "lang": "en"}
+{"text": "Is the cache the culprit? Probably not. I'll rerun the job with tracing and report back.", "label": "promised", "lang": "en"}
+{"text": "修复单已派出去了，交卷后我亲验再部署。", "label": "promised", "lang": "zh"}
+{"text": "审查还在跑，回来我给你汇总结论。", "label": "promised", "lang": "zh"}
+{"text": "等测试跑完再合并，我盯着。", "label": "promised", "lang": "zh"}
+{"text": "磁盘清理完成，释放 20G。下一步：不用你做任何事。", "label": "replied", "lang": "zh"}
+{"text": "The earlier run was still running at noon.\n\nIt has finished now and all checks are green.", "label": "replied", "lang": "en"}

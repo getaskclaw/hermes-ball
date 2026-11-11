@@ -13,7 +13,7 @@ DECISION = re.compile(
     r"|给我|告诉我|你选|需你拍板|需要你拍板|你拍板|请提供|发我|你定",
     re.I)
 PROMISE = re.compile(
-    r"\b(?:i'?ll|i will|i'?m going to|i am going to|let me|we'?ll|we will)\s+(?:now\s+|then\s+|also\s+)?"
+    r"\b(?:i['’]?ll|i will|i['’]?m going to|i am going to|let me|we['’]?ll|we will)\s+(?:now\s+|then\s+|also\s+)?"
     r"(?:report(?: back)?|post|update you|update (?:this|here)|let you know|get back|follow up|circle back"
     r"|check and (?:tell|let|report|get back)|check|look into|keep you posted|monitor|ping you|send (?:you )?(?:the )?results)"
     r"|\bwill (?:post (?:it |them |the \w+ )?(?:here|back)|report back|follow up|get back to you|update you)\b"
@@ -129,6 +129,34 @@ def extract_note(text: str) -> str:
 
 ASKED, REPLIED_STATE, WORKING, INTERRUPTED = "asked", "replied", "working", "interrupted"
 
+# Asks phrased as instructions (no '?'): "reply X", "回我一句", "说 go 我就…".
+ASK_INSTR = re.compile(
+    r"\b(?:please\s+)?reply\s+(?:with\b|[`\"'“*])|\breply\s+\w+\s+(?:and|to|or)\b|\b(?:say|type)\s+[`\"'“*]*(?:go|yes|ok)\b"
+    r"|\b(?:go|yes|ok)\s*/\s*(?:no|stop|go|yes)\s*[?？]"
+    r"|(?:请|你)?回(?:我)?(?:一句|一个字|一下|\s*[「“\"`*]|\s*`)|你回|回我|存好回|说\s*[*「“\"`]*\s*(?:go|落|好|对)|就说|你说\s*go"
+    r"|签完我|等你(?:点头|签|回)|你点头|你做一步|需你|你签",
+    re.I)
+# Future work by the assistant (only checked in the final sentences).
+PROMISE2 = re.compile(
+    r"\b(?:i['’]?ll|i will|we['’]?ll)\s+(?:\w+\s+)?(?:wait|decide|add|verify|run|share|merge|deploy|review|summari[sz]e|send|re-?run|fix|push|start|ship|confirm|keep)\b"
+    r"|\b(?:once|when|after)\b[^.?!]{0,80}\bi['’]?ll\b|\bthen i['’]?ll\b|\bwill run\b"
+    r"|\b(?:reviewing|running) now\b|\b(?:is|are) (?:still )?running\b|\bnot complete yet\b"
+    r"|我会|回来我|回来后|稍后再|报告回来|我盯|盯着|哨兵|我(?:就|再|来|先|直接)?(?:报|派|放|补|汇总|亲验|验收|复跑|提醒你)"
+    r"|(?:交卷|回来|落地|出来|跑完|完成|出齐|好了|一到|一落地)(?:后|了)?[^。！？\n]{0,12}(?:我|就|再)"
+    r"|等[^。！？\n]{0,20}(?:再|交付|结果)|(?:还|仍|正)在跑|在跑|施工中|在飞|通知我|已排|报你|给你(?:简报|汇总|对账)"
+    r"|正在[^。！？\\n]{0,12}(?:生成|跑|执行|部署)|会直接跑|已开工|已派",
+    re.I)
+NOT_ASK = re.compile(r"不用你做任何事|不需要你|无需你|不用你|你无事可做|不需你")
+
+
+def _is_ask(sent: str) -> bool:
+    s = NOT_ASK.sub("", sent)
+    return bool(s.rstrip(")）]*_`\"'”」 ").endswith(("?", "？")) or ASK_INSTR.search(s) or DECISION.search(s))
+
+
+def _is_promise(sent: str):
+    return PROMISE.search(sent) or PROMISE2.search(sent)
+
 
 def heuristic(text: str) -> dict:
     """-> {"ball", "promise", "note", "state"}. Decided from the FULL text, before any truncation.
@@ -144,12 +172,17 @@ def heuristic(text: str) -> dict:
     last = _last_line(text)
     if not text.strip():
         return {"ball": "human", "promise": None, "note": "empty reply", "state": REPLIED_STATE}
-    if QUESTION_END.search(last) or _asks_question(tail) or DECISION.search(tail):
+    # final sentences decide first: an ask there wins, else a promise there (an earlier '?' does not beat it)
+    final = _last_sentences(tail, PROMISE_SENTENCES)
+    if any(_is_ask(x) for x in final):
         return {"ball": "human", "promise": None, "note": extract_note(text), "state": ASKED}
-    for sent in reversed(_last_sentences(tail, PROMISE_SENTENCES)):
-        m = PROMISE.search(sent)
+    for sent in reversed(final):
+        m = _is_promise(sent)
         if m:
             return {"ball": "ai", "promise": m.group(0), "note": _cut(m.group(0)), "state": WORKING}
+    if QUESTION_END.search(last) or _asks_question(tail) or DECISION.search(NOT_ASK.sub("", tail)) \
+            or ASK_INSTR.search(tail[-300:]):
+        return {"ball": "human", "promise": None, "note": extract_note(text), "state": ASKED}
     return {"ball": "human", "promise": None, "note": "replied", "state": REPLIED_STATE}
 
 

@@ -13,7 +13,8 @@ the AI is waiting for your reply. Answer one and it drops off the list.
 - **Passive.** Ball only answers when you type its command. It never sends messages on its own and never
   changes what the AI sees or says.
 - **Local.** No network calls by default. One small SQLite file.
-- **Tested on Matrix.** Other platforms use `/ball` instead of `!ball` and should work, but are untested.
+- **Used daily on Matrix and Telegram** (the author's own setup). Other platforms use the same Hermes hooks but
+  are untested. On Matrix the command is `!ball`; elsewhere it is `/ball`.
 
 ## Install
 
@@ -66,9 +67,15 @@ The phrase rules are in English and Chinese. A question beats a promise, and pol
 if you have any questions" don't count as questions. The question shown is copied from the AI's reply by fixed
 rules, not summarised by an AI: stored up to 80 characters, shown up to 40.
 
-The rules will sometimes be wrong, so treat Ball as a reminder, not a guarantee. An optional LLM judge (off by
-default) can refine the verdict. The repo's 88 hand-written test endings (half English, half Chinese) check that
-the rules keep working; nobody has measured accuracy on real chats yet.
+**Measured accuracy.** On 150 real chat endings that were not used while writing the rules (the author's own
+Telegram and Matrix chats, English and Chinese, labelled independently by an LLM):
+
+- "Waiting on you" is right **77%** of the time, and catches **77%** of the chats that really wait on you.
+- Promises ("I'll report back") are caught **44%** of the time; missed ones show as Done.
+- Overall the three-way status agrees **69%** of the time.
+
+So treat Ball as a reminder, not a guarantee. An optional LLM judge (off by default) can refine the verdict.
+The 103 test endings in `tests/fixtures/` keep the rules from regressing; they are not the accuracy figure.
 
 ## Settings
 
@@ -106,7 +113,7 @@ If you turn on `llm_judge`, the last 2000 characters of the AI's reply go to **y
 
 ## Limits
 
-- **It can misjudge.** Phrase rules are a heuristic.
+- **It can misjudge.** Phrase rules are a heuristic; see the measured accuracy above.
 - **It never wakes the AI.** "AI stalled" is a flag; you have to reply.
 - Chats in the CLI or TUI aren't tracked, only chat platforms.
 - Rooms you have left stay in the database until you run `!ball forget stale` (they are hidden after
