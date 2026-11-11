@@ -9,7 +9,8 @@ QUESTION_END = re.compile(r"[?？]\s*[)）\]\*_`\"'”」]*\s*$")
 DECISION = re.compile(
     r"\b(should i|shall i|do you want|would you like|want me to|let me know|please (confirm|approve|choose|decide)"
     r"|can you (confirm|approve)|approve|your call|which (one|option) do you|waiting for your|need your)\b"
-    r"|要不要|是否需要|是否|请确认|请批准|请选择|你决定|你来定|需要你|等你|你看呢|可以吗|行吗|好吗",
+    r"|要不要|是否需要|是否|请确认|请批准|请选择|你决定|你来定|需要你|等你|你看呢|可以吗|行吗|好吗"
+    r"|给我|告诉我|你选|需你拍板|需要你拍板|你拍板|请提供|发我|你定",
     re.I)
 PROMISE = re.compile(
     r"\b(i'?ll|i will|i'?m going to|let me) (report back|follow up|check|get back|look into|circle back|update you|keep you posted|monitor|ping you)"
@@ -24,6 +25,15 @@ def _last_line(text: str) -> str:
     return lines[-1] if lines else ""
 
 
+_SENT = re.compile(r"[^。！!？?.\n]*[。！!？?.\n]?")
+
+
+def _asks_question(text: str, n: int = 2) -> bool:
+    """True if any of the final n sentences ends with a question mark."""
+    sents = [x.strip() for x in _SENT.findall((text or "").strip()) if x.strip()]
+    return any(x.rstrip(")）]*_`\"'”」 ").endswith(("?", "？")) for x in sents[-n:])
+
+
 def heuristic(text: str) -> dict:
     """-> {"ball", "promise", "note"}. Question/decision ask -> human; promise w/o ask -> ai + promise."""
     text = text or ""
@@ -31,7 +41,7 @@ def heuristic(text: str) -> dict:
     last = _last_line(text)
     if not text.strip():
         return {"ball": "human", "promise": None, "note": "empty reply"}
-    if QUESTION_END.search(last) or DECISION.search(tail):
+    if QUESTION_END.search(last) or _asks_question(tail) or DECISION.search(tail):
         return {"ball": "human", "promise": None, "note": "asked: " + last[:120]}
     m = PROMISE.search(tail)
     if m:

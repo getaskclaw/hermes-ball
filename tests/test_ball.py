@@ -425,3 +425,29 @@ def test_thread_label_topic_newline_collapsed():
     lab = core.thread_label(_topic_src("  evil\n\nfake row\r\n  x  "))
     assert lab == "Grp (telegram) · evil fake row x"
     assert "\n" not in lab and "\r" not in lab
+
+
+# --- regression: question/ask takes precedence over promise ---
+import pytest as _pt
+_h = judge.heuristic
+
+@_pt.mark.parametrize("text", [
+    "哪个插件？给我名字或一句话说它干啥，我马上出两条。",
+    "Which repo? I'll check it right after you tell me.",
+    "要不要我稍后重跑一遍测试",
+    "你选 A 还是 B，我马上开工。",
+    "Done with step 1. Should I continue? I will follow up either way.",
+    "告诉我目标分支，我会继续。",
+])
+def test_question_beats_promise(text):
+    r = _h(text)
+    assert r["ball"] == "human" and r["promise"] is None and r["note"].startswith("asked")
+
+@_pt.mark.parametrize("text", ["Tests are running, I'll report back.", "我马上去跑一遍。"])
+def test_pure_promise_is_ai(text):
+    r = _h(text)
+    assert r["ball"] == "ai" and r["promise"]
+
+@_pt.mark.parametrize("text", ["The fix is in judge.py line 34.", "已完成，测试全部通过。"])
+def test_plain_answer_replied(text):
+    assert _h(text) == {"ball": "human", "promise": None, "note": "replied"}
