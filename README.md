@@ -23,70 +23,56 @@ Requires Hermes `>=0.23.1`. Restart the gateway to load it.
 | `!ball all` | the 3 chats that have waited longest, plus stalled + working counts |
 | `!ball more` | every chat waiting on you (`!ball more all` also lists the done ones) |
 | `!ball done` | chats the AI answered without asking anything — nothing needed from you |
-| `!ball all hide`, `!ball more hide` | same, chat names replaced by 对话 A/B/C (for screenshots) |
+| `!ball all hide`, `!ball more hide` | same, chat names replaced by Chat A/B/C (for screenshots) |
 | `!ball help` | short help |
 
 `!ball` in a chat:
 
 ```
-🏀 轮到你 · 8m
-它问你：要我写进哪个文件？
+🏀 Your move · 8m
+It asks: Which file should I write to?
 ```
 ```
-✅ 已答完 · 8m — 无需你处理
+✅ Done · 8m — nothing needed
 ```
 ```
-🤖 AI 在干活 · 2m — 不用管
+🤖 AI is working · 2m — nothing needed from you
 ```
 ```
-⚠️ AI 卡住了 · 2h
-说了「马上」但没动静 · 回一句 go 催它
+⚠️ AI stalled · 2h
+Said "I'll report back" but nothing happened · reply go to nudge it
 ```
 
-`!ball all` (output from the test suite):
+`!ball all`:
 
 ```
-🏀 10 个对话在等你
-1. Ball Demo 10 · 1h — 问题10？
-2. Ball Demo 9 · 1h — 问题9？
-3. Ball Demo 8 · 1h — 问题8？
-…还有 7 个：!ball more
-⚠️ 1 个 AI 卡住了：Ops — 去那里回 go
-🤖 1 个 AI 在干活
+🏀 4 chats waiting on you
+1. Blog draft · 2d — Delete the old drafts?
+2. Photo sorter · 1d — Should I rename the files?
+3. Tax notes · 5h — Which file should I write to?
+…1 more: !ball more
+⚠️ 1 AI stalled: Deploy helper — reply go there
+🤖 1 AI working
+💤 3 done, nothing needed
 ```
 
 Only chats where the AI **asked** something count as "waiting on you". Chats where it just answered
 (note `replied`) are *done*: not counted, summarised in one line at the bottom, listed by `!ball done`:
 
 ```
-🏀 2 个对话在等你
-1. Ball Demo 2 · 25m — 问题2？
-2. Ball Demo 1 · 15m — 问题1？
-💤 7 个已答完，无需你处理
-```
-```
-💤 3 个已答完，无需你处理
-1. Done 3 · 1h
-2. Done 2 · 1h
-3. Done 1 · 1h
+💤 3 done, nothing needed
+1. Book club · 1d
+2. Meal planner · 6h
+3. Budget sheet · 25m
 ```
 
-English:
+Nothing waiting: `✅ No chats waiting on you` (plus the done line, e.g. `💤 7 done, nothing needed`).
 
-```
-🏀 1 chat waiting on you
-1. Ball · 1h — Should I deploy main now?
-⚠️ 1 AI stalled: Ops — reply go there
-```
-
-Nothing waiting: `✅ 没有对话在等你` / `✅ No chats waiting on you` (plus the done line, e.g. `💤 7 done, nothing needed`).
-English single chat: `✅ Done · 8m — nothing needed`.
-
-**AI stalled** means the AI ended its turn with a promise ("I'll report back", "马上") but its loop has stopped —
+**AI stalled** means the AI ended its turn with a promise ("I'll report back") but its loop has stopped —
 nothing will happen until you reply (e.g. `go`).
 
-**Language**: `language: auto` (default) answers in Chinese if your last message in that chat (or the stored
-question) contains Chinese, otherwise English. Set `zh` or `en` to force.
+**Language**: `language: auto` (default) replies in Chinese if your last message in that chat (or the stored
+question) contains CJK characters, otherwise English. Set `zh` or `en` to force.
 
 Chat names come from the chat's public name (e.g. the Matrix room name); DMs show `DM`; otherwise
 `platform · #hash` (raw ids are never shown).
@@ -101,7 +87,7 @@ Chat names come from the chat's public name (e.g. the Matrix room name); DMs sho
 | turn ends (`post_llm_call`) | judged: question or decision ask → you; unfulfilled promise → AI + ⚠; otherwise you |
 | interrupt, `/stop` (`agent_loop_stopped`) | you (`interrupted: <reason>`) |
 
-The turn-end judge is a deterministic English + Chinese phrase heuristic. Optionally an LLM judge can refine it.
+The turn-end judge is a deterministic phrase heuristic (English and Chinese). Optionally an LLM judge can refine it.
 
 ## Configuration
 
@@ -119,7 +105,7 @@ plugins:
 
 One SQLite row per thread in `<HERMES_HOME>/plugin-data/ball/data.db` (WAL):
 `key` (`profile:platform:chat_id:thread_id`), `ball`, `since`, `promise` (matched phrase, ≤200 chars), `note`
-(≤80 chars: only the short question the AI asked, e.g. `要我写进哪个文件？`, or `replied` — never the full reply),
+(≤80 chars: only the short question the AI asked, e.g. `Which file should I write to?`, or `replied` — never the full reply),
 `updated`, `label` (chat name), `lang` (`zh`/`en`, from your last message's script — not its text).
 **No transcripts, no message bodies.** The session→thread map lives only in memory.
 
