@@ -1,11 +1,10 @@
 # hermes-ball
 
-**Whose turn is it?** Ball is a [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that keeps,
-for every chat thread, one fact: is the ball with **you** or with the **AI** — and since when.
-It is a board, not a nag: it never sends messages, never pings, never rewrites anything. You ask, it answers.
+**Ball shows which of your AI chats are waiting on you, and what each one asked.**
 
-It also raises a flag when the AI ends its turn with a promise ("I'll report back", "稍后发你") but the agent
-loop has actually stopped — an *empty promise*.
+A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin. It never sends messages, never pings,
+never rewrites anything — you ask, it answers. No AI summarizer: the "what it asked" line is the last question
+sentence of the AI's reply, cut to 40 characters, picked by plain rules.
 
 ## Install
 
@@ -18,21 +17,58 @@ Requires Hermes `>=0.23.1`. Restart the gateway to load it.
 
 ## Commands
 
-| Command | Shows |
+| Command (Matrix `!ball`, elsewhere `/ball`) | Shows |
 |---|---|
-| `/ball` (Matrix: `!ball`) | this thread, e.g. `🏀 Ball: you · 3m — asked: Should I deploy?` |
-| `/ball all` | the board: threads waiting on you first, then oldest first; age, `⚠` empty-promise flag, note |
+| `!ball` | this chat: your move / AI working / AI stalled |
+| `!ball all` | the 3 chats that have waited longest, plus stalled + working counts |
+| `!ball more` | every chat waiting on you |
+| `!ball all hide`, `!ball more hide` | same, chat names replaced by 对话 A/B/C (for screenshots) |
+| `!ball help` | short help |
 
-Sample `/ball all`:
+`!ball` in a chat:
 
 ```
-🏀 Ball board — 1 waiting on you, 2 with AI
-you ·   1h · Ball (matrix) — asked: Should I deploy?
-AI  ·   5m ⚠ · DM (telegram) — promised: I'll check the logs… ← here
-AI  ·   2d · matrix · #a1b2 — you spoke
+🏀 轮到你 · 8m
+它问你：要我写进哪个文件？
+```
+```
+🤖 AI 在干活 · 2m — 不用管
+```
+```
+⚠️ AI 卡住了 · 2h
+说了「马上」但没动静 · 回一句 go 催它
 ```
 
-Threads are labelled from the chat's public name (`SessionSource.chat_name`, e.g. the Matrix room name); DMs without a name show `DM (platform)`; otherwise `platform · #hash` (short hash of the chat id — raw ids are never shown). Notes are cut to 60 chars; `← here` marks the thread you asked from.
+`!ball all` (output from the test suite):
+
+```
+🏀 10 个对话在等你
+1. Ball Demo 10 · 1h — 问题10？
+2. Ball Demo 9 · 1h — 问题9？
+3. Ball Demo 8 · 1h — 问题8？
+…还有 7 个：!ball more
+⚠️ 1 个 AI 卡住了：Ops — 去那里回 go
+🤖 1 个 AI 在干活
+```
+
+English:
+
+```
+🏀 1 chat waiting on you
+1. Ball · 1h — Should I deploy main now?
+⚠️ 1 AI stalled: Ops — reply go there
+```
+
+Nothing waiting: `✅ 没有对话在等你` / `✅ No chats waiting on you`.
+
+**AI stalled** means the AI ended its turn with a promise ("I'll report back", "马上") but its loop has stopped —
+nothing will happen until you reply (e.g. `go`).
+
+**Language**: `language: auto` (default) answers in Chinese if your last message in that chat (or the stored
+question) contains Chinese, otherwise English. Set `zh` or `en` to force.
+
+Chat names come from the chat's public name (e.g. the Matrix room name); DMs show `DM`; otherwise
+`platform · #hash` (raw ids are never shown).
 
 ## How the ball moves
 
@@ -53,6 +89,7 @@ plugins:
   entries:
     ball:
       settings:
+        language: auto          # auto | zh | en
         llm_judge: false        # default; true = ask the active model after each turn
         llm_judge_timeout: 20   # seconds; on timeout/bad JSON the heuristic stands, note = "judge failed"
 ```
@@ -61,7 +98,8 @@ plugins:
 
 One SQLite row per thread in `<HERMES_HOME>/plugin-data/ball/data.db` (WAL):
 `key` (`profile:platform:chat_id:thread_id`), `ball`, `since`, `promise` (matched phrase, ≤200 chars), `note`
-(≤200 chars, e.g. the last line of a question or a redacted approval prompt), `updated`.
+(≤80 chars: only the short question the AI asked, e.g. `要我写进哪个文件？`, or `replied` — never the full reply),
+`updated`, `label` (chat name), `lang` (`zh`/`en`, from your last message's script — not its text).
 **No transcripts, no message bodies.** The session→thread map lives only in memory.
 
 ## Network / LLM disclosure

@@ -13,10 +13,13 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS threads (
     promise TEXT,
     note TEXT NOT NULL DEFAULT '',
     updated TEXT NOT NULL,
-    label TEXT
+    label TEXT,
+    lang TEXT
 )"""
-COLS = ("key", "ball", "since", "promise", "note", "updated", "label")
+COLS = ("key", "ball", "since", "promise", "note", "updated", "label", "lang")
+_SEL = "SELECT " + ",".join(COLS) + " FROM threads"
 NOTE_MAX = 200
+SHORT_NOTE_MAX = 80  # notes are a short question, never the full reply
 
 
 def now_iso(precise: bool = False) -> str:
@@ -45,17 +48,20 @@ class Store:
             have = {c[1] for c in conn.execute("PRAGMA table_info(threads)")}
             if "label" not in have:  # migrate pre-label DBs in place; never drops data
                 conn.execute("ALTER TABLE threads ADD COLUMN label TEXT")
+            if "lang" not in have:
+                conn.execute("ALTER TABLE threads ADD COLUMN lang TEXT")
             conn.commit()
             self._conn = conn
         return self._conn
 
     def set(self, key: str, ball: str, *, promise: Optional[str] = None, note: str = "",
-            since: Optional[str] = None, label: Optional[str] = None) -> dict:
+            since: Optional[str] = None, label: Optional[str] = None, lang: Optional[str] = None) -> dict:
         """Upsert. ``since`` is kept when the ball does not change hands (unless given).
-        ``label`` (human-readable thread name) is kept when not given."""
+        ``label`` (human-readable thread name) and ``lang`` ('zh'/'en', from the user's last message) are kept
+        when not given."""
         if ball not in ("ai", "human"):
             raise ValueError(f"bad ball {ball!r}")
-        note = (note or "").replace("\n", " ").strip()[:NOTE_MAX]
+        note = " ".join((note or "").split())[:SHORT_NOTE_MAX]
         promise = promise[:NOTE_MAX] if promise else None
         label = (label or "").replace("\n", " ").strip()[:NOTE_MAX] or None
         ts = now_iso(precise=True)
@@ -66,14 +72,16 @@ class Store:
                 since = cur["since"] if cur and cur["ball"] == ball else now_iso()
             if label is None and cur:
                 label = cur.get("label")
+            if lang not in ("zh", "en"):
+                lang = cur.get("lang") if cur else None
             db.execute(
-                "INSERT INTO threads(key,ball,since,promise,note,updated,label) VALUES(?,?,?,?,?,?,?) "
+                "INSERT INTO threads(key,ball,since,promise,note,updated,label,lang) VALUES(?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET ball=excluded.ball, since=excluded.since, "
-                "promise=excluded.promise, note=excluded.note, updated=excluded.updated, label=excluded.label",
-                (key, ball, since, promise, note, ts, label))
+                "promise=excluded.promise, note=excluded.note, updated=excluded.updated, label=excluded.label, lang=excluded.lang",
+                (key, ball, since, promise, note, ts, label, lang))
             db.commit()
             return {"key": key, "ball": ball, "since": since, "promise": promise, "note": note, "updated": ts,
-                    "label": label}
+                    "label": label, "lang": lang}
 
     def set_if(self, key: str, expected_updated: str, ball: str, **kw) -> Optional[dict]:
         """Atomic compare-and-set: write only if the row's ``updated`` still equals the stamp."""
@@ -86,12 +94,12 @@ class Store:
     def get(self, key: str) -> Optional[dict]:
         with self._lock:
             row = self._db().execute(
-                "SELECT key,ball,since,promise,note,updated,label FROM threads WHERE key=?", (key,)).fetchone()
+                _SEL + " WHERE key=?", (key,)).fetchone()
         return _row(row) if row else None
 
     def all(self) -> list[dict]:
         with self._lock:
-            rows = self._db().execute("SELECT key,ball,since,promise,note,updated,label FROM threads").fetchall()
+            rows = self._db().execute(_SEL).fetchall()
         return [_row(r) for r in rows]
 
     def delete(self, key: str) -> bool:

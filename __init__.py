@@ -1,4 +1,4 @@
-"""Ball — whose turn is it? A per-thread board, not a nag."""
+"""Ball — shows which of your AI chats are waiting on you, and what each one asked."""
 from __future__ import annotations
 
 if __package__:  # Hermes loads this dir as a package; pytest's rootdir collection may not
@@ -16,6 +16,6 @@ def register(ctx):
     for name in HOOKS:
         ctx.register_hook(name, getattr(ball, name if name.startswith("on_") else "on_" + name))
     ctx.register_command("ball", ball.command,
-                         description="Whose turn is it? `/ball` for this thread, `/ball all` for the board",
-                         args_hint="[all]")
+                         description="Which AI chats are waiting on you? `/ball`, `/ball all`, `/ball more`, `/ball help`",
+                         args_hint="[all|more|help] [hide]")
     return ball

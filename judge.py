@@ -34,6 +34,56 @@ def _asks_question(text: str, n: int = 2) -> bool:
     return any(x.rstrip(")）]*_`\"'”」 ").endswith(("?", "？")) for x in sents[-n:])
 
 
+_SPLIT = re.compile(r"[^。！？!?.\n]*[。！？!?.\n]?")
+_MD = re.compile(r"`+|\*\*|__|~~|^#+\s*|^\s*(?:[-*+>]|\d+[.)])\s+|\[([^\]]*)\]\([^)]*\)")
+_LEGACY = re.compile(r"^(asked|promised)\s*:\s*", re.I)
+NOTE_LEN = 40
+REPLIED = "replied"
+
+
+def _clean(s: str) -> str:
+    s = _MD.sub(lambda m: m.group(1) or "", s.strip())
+    return " ".join(s.split()).strip(" \"'“”「」()（）")
+
+
+def _cut(s: str, n: int = NOTE_LEN) -> str:
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
+def extract_note(text: str) -> str:
+    """Last question sentence of a reply (≤40 chars, markdown stripped), else 'replied'. Deterministic."""
+    text = (text or "").strip()
+    legacy_ask = text.lower().startswith("asked")
+    text = _LEGACY.sub("", text)
+    if not text:
+        return REPLIED
+    # keep '.' inside words/numbers/filenames (judge.py, 1.5) from splitting: only split '.' before space/end
+    protected = re.sub(r"\.(?=\S)", "\x00", text)
+    sents = [x.replace("\x00", ".").strip() for x in _SPLIT.findall(protected)]
+    sents = [x for x in sents if x.strip(" 。！？!?.")]
+    pick = next((x for x in reversed(sents) if x.rstrip(")）]*_`\"'”」 ").endswith(("?", "？"))), None)
+    if pick is None:
+        pick = next((x for x in reversed(sents) if DECISION.search(x)), None)
+    if pick is None and legacy_ask:  # old rows stored "asked: <last line>"
+        pick = sents[-1] if sents else None
+    if pick is None:
+        return REPLIED
+    pick = _clean(pick)
+    if len(pick) > NOTE_LEN:  # long question: keep the trailing clauses that fit (the actual ask)
+        parts = re.split(r"(?<=[，,；;：:])\s*", pick)
+        tail = ""
+        for part in reversed(parts):
+            if len(part + tail) > NOTE_LEN:
+                break
+            tail = part + tail
+        pick = tail or pick
+    if not pick:
+        return REPLIED
+    if pick[-1] in "。.!！":
+        pick = pick[:-1]
+    return _cut(pick)
+
+
 def heuristic(text: str) -> dict:
     """-> {"ball", "promise", "note"}. Question/decision ask -> human; promise w/o ask -> ai + promise."""
     text = text or ""
@@ -42,10 +92,10 @@ def heuristic(text: str) -> dict:
     if not text.strip():
         return {"ball": "human", "promise": None, "note": "empty reply"}
     if QUESTION_END.search(last) or _asks_question(tail) or DECISION.search(tail):
-        return {"ball": "human", "promise": None, "note": "asked: " + last[:120]}
+        return {"ball": "human", "promise": None, "note": extract_note(text)}
     m = PROMISE.search(tail)
     if m:
-        return {"ball": "ai", "promise": m.group(0), "note": "promised: " + m.group(0)}
+        return {"ball": "ai", "promise": m.group(0), "note": _cut(m.group(0))}
     return {"ball": "human", "promise": None, "note": "replied"}
 
 

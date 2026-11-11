@@ -5,6 +5,7 @@ import functools
 import hashlib
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -112,34 +113,120 @@ def fmt_age(since: str, now: Optional[datetime] = None) -> str:
     return f"{secs // 86400}d"
 
 
-def _who(ball: str) -> str:
-    return "you" if ball == "human" else "AI"
+_CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff]")
+_PLATFORM_SUFFIX = re.compile(r" \((?:[a-z_]+)\)(?= ·|$)")
+TOP = 3
+
+L = {
+    "zh": dict(your="🏀 轮到你", working="🤖 AI 在干活", stalled="⚠️ AI 卡住了", calm="不用管",
+               asks="它问你：", replied="它已回复，等你看", interrupted="已中断，等你决定",
+               stall_why="说了「{p}」但没动静 · 回一句 go 催它", none="🏀 这个对话还没有记录。",
+               nothread="🏀 这里不是对话。试试 !ball all", head="🏀 {n} 个对话在等你", empty="✅ 没有对话在等你",
+               more="…还有 {n} 个：!ball more", stall_line="⚠️ {n} 个 AI 卡住了：{names} — 去那里回 go",
+               work_line="🤖 {n} 个 AI 在干活", sep="、", chat="对话 {c}", short_replied="已回复",
+               short_interrupted="已中断",
+               help="球在谁手里？— 告诉你哪些 AI 对话在等你。\n"
+                    "!ball — 这个对话轮到谁\n!ball all — 等你的前 3 个\n!ball more — 全部等你的对话\n"
+                    "!ball all hide — 隐藏对话名（方便截图）"),
+    "en": dict(your="🏀 Your move", working="🤖 AI is working", stalled="⚠️ AI stalled", calm="nothing to do",
+               asks="It asks: ", replied="It replied — your turn to read", interrupted="Interrupted — your call",
+               stall_why="said \u201c{p}\u201d but went quiet · reply go to nudge it",
+               none="🏀 No turns tracked in this chat yet.", nothread="🏀 Not a chat. Try !ball all",
+               head="🏀 {n} chat{s} waiting on you", empty="✅ No chats waiting on you",
+               more="…{n} more: !ball more", stall_line="⚠️ {n} AI stalled: {names} — reply go there",
+               work_line="🤖 {n} AI working", sep=", ", chat="Chat {c}", short_replied="replied",
+               short_interrupted="interrupted",
+               help="Whose turn is it? — shows which AI chats are waiting on you.\n"
+                    "!ball — this chat\n!ball all — top 3 waiting on you\n!ball more — every chat waiting on you\n"
+                    "!ball all hide — hide chat names (for screenshots)"),
+}
 
 
-def render_one(row: Optional[dict], now: Optional[datetime] = None) -> str:
+def has_cjk(s: Any) -> bool:
+    return bool(isinstance(s, str) and _CJK.search(s))
+
+
+def row_lang(row: Optional[dict]) -> Optional[str]:
     if not row:
-        return "🏀 Ball: no turns tracked in this thread yet."
-    s = f"🏀 Ball: {_who(row['ball'])} · {fmt_age(row['since'], now)}"
+        return None
+    if row.get("lang") in ("zh", "en"):
+        return row["lang"]
+    return "zh" if has_cjk(row.get("note")) or has_cjk(row.get("promise")) else None
+
+
+def pick_lang(setting: Any, rows: list, here: Optional[dict] = None) -> str:
+    """language: zh|en forces; auto = this chat's language (user's last message / note), else zh if any chat is."""
+    setting = str(setting or "auto").lower()
+    if setting in ("zh", "en"):
+        return setting
+    lang = row_lang(here)
+    if lang:
+        return lang
+    return "zh" if any(row_lang(r) == "zh" for r in rows) else "en"
+
+
+def display_name(row: dict) -> str:
+    label = row.get("label") or label_from_key(row["key"])
+    return _PLATFORM_SUFFIX.sub("", label).strip()
+
+
+def short_note(row: dict, lang: str) -> str:
+    """What the waiting chat wants, always short. Old long notes go through the same extractor."""
+    note = (row.get("note") or "").strip()
+    t = L[lang]
+    low = note.lower()
+    if low.startswith("interrupted"):
+        return t["short_interrupted"]
+    q = judge.extract_note(note)
+    return t["short_replied"] if q == judge.REPLIED else q
+
+
+def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Optional[str] = None) -> str:
+    lang = lang or pick_lang("auto", [], row)
+    t = L[lang]
+    if not row:
+        return t["none"]
+    age = fmt_age(row["since"], now)
     if row["ball"] == "ai" and row.get("promise"):
-        s += " ⚠ empty promise"
-    if row.get("note"):
-        s += f" — {row['note']}"
-    return s
+        return f"{t['stalled']} · {age}\n" + t["stall_why"].format(p=judge._cut(row["promise"], 20))
+    if row["ball"] == "ai":
+        return f"{t['working']} · {age} — {t['calm']}"
+    note = (row.get("note") or "").strip()
+    if note.lower().startswith("interrupted"):
+        line2 = t["interrupted"]
+    else:
+        q = judge.extract_note(note)
+        line2 = t["replied"] if q == judge.REPLIED else t["asks"] + q
+    return f"{t['your']} · {age}\n{line2}"
 
 
-def render_board(rows: list[dict], now: Optional[datetime] = None, here: Optional[str] = None) -> str:
-    if not rows:
-        return "🏀 Ball board is empty — no threads tracked yet."
-    rows = sorted(rows, key=lambda r: (0 if r["ball"] == "human" else 1, r["since"]))
-    waiting = sum(1 for r in rows if r["ball"] == "human")
-    out = [f"🏀 Ball board — {waiting} waiting on you, {len(rows) - waiting} with AI"]
-    for r in rows:
-        flag = " ⚠" if r["ball"] == "ai" and r.get("promise") else ""
-        note = f" — {_trunc(r['note'])}" if r.get("note") else ""
-        label = r.get("label") or label_from_key(r["key"])
-        mark = " ← here" if here and r["key"] == here else ""
-        out.append(f"{'you' if r['ball'] == 'human' else 'AI '} · {fmt_age(r['since'], now):>4}{flag} · "
-                   f"{label}{note}{mark}")
+def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optional[str] = None,
+                 full: bool = False, hide: bool = False) -> str:
+    lang = lang or pick_lang("auto", rows)
+    t = L[lang]
+    waiting = sorted((r for r in rows if r["ball"] == "human"), key=lambda r: r["since"])
+    stalled = sorted((r for r in rows if r["ball"] == "ai" and r.get("promise")), key=lambda r: r["since"])
+    working = [r for r in rows if r["ball"] == "ai" and not r.get("promise")]
+    names: dict[str, str] = {}
+
+    def name(r):
+        if not hide:
+            return display_name(r)
+        if r["key"] not in names:
+            i = len(names)
+            names[r["key"]] = t["chat"].format(c=chr(65 + i) if i < 26 else str(i + 1))
+        return names[r["key"]]
+
+    out = [t["head"].format(n=len(waiting), s="" if len(waiting) == 1 else "s") if waiting else t["empty"]]
+    shown = waiting if full else waiting[:TOP]
+    for i, r in enumerate(shown, 1):
+        out.append(f"{i}. {name(r)} · {fmt_age(r['since'], now)} — {short_note(r, lang)}")
+    if len(waiting) > len(shown):
+        out.append(t["more"].format(n=len(waiting) - len(shown)))
+    if stalled:
+        out.append(t["stall_line"].format(n=len(stalled), names=t["sep"].join(name(r) for r in stalled)))
+    if working:
+        out.append(t["work_line"].format(n=len(working)))
     return "\n".join(out)
 
 
@@ -210,7 +297,9 @@ class Ball:
             # are control traffic, not a conversational turn: they must not move the ball, so `/ball` reports
             # the state as it was *before* the query.
             return None
-        self.store.set(thread_key(source), "ai", note="you spoke", label=thread_label(source))
+        text = getattr(event, "text", None)
+        lang = ("zh" if has_cjk(text) else "en") if isinstance(text, str) and text.strip() else None
+        self.store.set(thread_key(source), "ai", note="you spoke", label=thread_label(source), lang=lang)
         return None  # never rewrite/skip the message
 
     @safe
@@ -218,7 +307,8 @@ class Ball:
         tkey = self._resolve(session_key, session_id)
         if not tkey:
             return None
-        note = f"{kind or 'input'}: {(prompt or '')[:80]}".strip().rstrip(":")
+        q = judge.extract_note(prompt or "")
+        note = q if q != judge.REPLIED else judge._cut(f"{kind or 'input'}: {(prompt or '').strip()}".strip(": "))
         self.store.set(tkey, "human", note=note)
         return None
 
@@ -284,16 +374,21 @@ class Ball:
     # ── command ──
     @safe
     def command(self, raw_args: str = "", source=None, session_id=None, session_key=None, **_):
-        args = (raw_args or "").strip().lower()
-        tkey = None
-        if args in ("all", "board"):
-            here = thread_key(source) if source is not None else self._resolve(session_key, session_id)
-            return render_board(self.store.all(), here=here)
-        if source is not None:
-            tkey = thread_key(source)
-            self._learn(tkey, session_key=session_key, session_id=session_id)
-        else:
-            tkey = self._resolve(session_key, session_id)
-        if not tkey:
-            return "🏀 Ball: no chat thread here. Try `/ball all` for the board."
-        return render_one(self.store.get(tkey))
+        words = (raw_args or "").strip().lower().split()
+        sub = words[0] if words else ""
+        hide = "hide" in words[1:]
+        here = thread_key(source) if source is not None else self._resolve(session_key, session_id)
+        if source is not None and here:
+            self._learn(here, session_key=session_key, session_id=session_id)
+        setting = self._cfg("language", "auto")
+        if sub in ("help", "?"):
+            row = self.store.get(here) if here else None
+            return L[pick_lang(setting, self.store.all(), row)]["help"]
+        if sub in ("all", "board", "more"):
+            rows = self.store.all()
+            here_row = next((r for r in rows if r["key"] == here), None)
+            return render_board(rows, lang=pick_lang(setting, rows, here_row), full=sub == "more", hide=hide)
+        if not here:
+            return L[pick_lang(setting, self.store.all())]["nothread"]
+        row = self.store.get(here)
+        return render_one(row, lang=pick_lang(setting, self.store.all() if not row else [], row))

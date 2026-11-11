@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import threading
 import time
@@ -93,7 +94,7 @@ def test_store_crud(store):
 def test_store_columns_only(store):
     store.set("k", "ai")
     cols = [c[1] for c in store._db().execute("PRAGMA table_info(threads)")]
-    assert cols == ["key", "ball", "since", "promise", "note", "updated", "label"]
+    assert cols == ["key", "ball", "since", "promise", "note", "updated", "label", "lang"]
 
 
 def test_store_concurrency(dbpath):
@@ -274,33 +275,110 @@ def _iso(mins):
 
 
 def test_render_one():
-    assert core.render_one({"ball": "human", "since": _iso(3), "promise": None, "note": "asked: ok?"}, NOW) == \
-        "🏀 Ball: you · 3m — asked: ok?"
-    assert core.render_one({"ball": "ai", "since": _iso(120), "promise": "I'll check", "note": ""}, NOW) == \
-        "🏀 Ball: AI · 2h ⚠ empty promise"
-    assert "no turns" in core.render_one(None)
+    zh = {"ball": "human", "since": _iso(8), "promise": None, "note": "要我写进哪个文件？", "lang": "zh"}
+    assert core.render_one(zh, NOW) == "🏀 轮到你 · 8m\n它问你：要我写进哪个文件？"
+    en = {"ball": "human", "since": _iso(3), "promise": None, "note": "asked: ok?"}
+    assert core.render_one(en, NOW) == "🏀 Your move · 3m\nIt asks: ok?"
+    assert core.render_one({"ball": "ai", "since": _iso(2), "promise": None, "note": "", "lang": "zh"}, NOW) == \
+        "🤖 AI 在干活 · 2m — 不用管"
+    assert core.render_one({"ball": "ai", "since": _iso(120), "promise": "马上", "note": "马上"}, NOW) == \
+        "⚠️ AI 卡住了 · 2h\n说了「马上」但没动静 · 回一句 go 催它"
+    assert core.render_one({"ball": "ai", "since": _iso(5), "promise": "I'll check", "note": ""}, NOW) == \
+        "⚠️ AI stalled · 5m\nsaid \u201cI'll check\u201d but went quiet · reply go to nudge it"
+    assert core.render_one({"ball": "human", "since": _iso(1), "promise": None, "note": "replied", "lang": "zh"},
+                           NOW) == "🏀 轮到你 · 1m\n它已回复，等你看"
+    assert "no turns" in core.render_one(None).lower()
 
 
-def test_render_board_order():
-    rows = [
-        {"key": "a", "ball": "ai", "since": _iso(50), "promise": "x", "note": "p"},
-        {"key": "b", "ball": "human", "since": _iso(5), "promise": None, "note": ""},
-        {"key": "c", "ball": "human", "since": _iso(90), "promise": None, "note": "old"},
-        {"key": "d", "ball": "ai", "since": _iso(200), "promise": None, "note": ""},
+def _rows():
+    rows = [{"key": f"p:matrix:!r{i}:", "ball": "human", "since": _iso(10 * i + 5), "promise": None,
+             "note": f"问题{i}？", "label": f"Ball Demo {i} (matrix)", "lang": "zh"} for i in range(1, 11)]
+    rows += [{"key": "p:tg:x:", "ball": "ai", "since": _iso(30), "promise": "马上", "note": "马上",
+              "label": "Ops (telegram)", "lang": "zh"},
+             {"key": "p:tg:y:", "ball": "ai", "since": _iso(2), "promise": None, "note": "you spoke",
+              "label": "DM (telegram)", "lang": "zh"}]
+    return rows
+
+
+def test_board_top3_oldest_first():
+    out = core.render_board(_rows(), NOW)
+    print("\n--- !ball all ---\n" + out)
+    assert out.splitlines() == [
+        "🏀 10 个对话在等你",
+        "1. Ball Demo 10 · 1h — 问题10？",
+        "2. Ball Demo 9 · 1h — 问题9？",
+        "3. Ball Demo 8 · 1h — 问题8？",
+        "…还有 7 个：!ball more",
+        "⚠️ 1 个 AI 卡住了：Ops — 去那里回 go",
+        "🤖 1 个 AI 在干活",
     ]
-    lines = core.render_board(rows, NOW).splitlines()
-    assert lines[0].startswith("🏀 Ball board — 2 waiting on you, 2 with AI")
-    assert [l.split(" · ")[-1].split(" ")[0] for l in lines[1:]] == [core._short_hash(k) for k in "cbda"]
-    assert "⚠" in lines[4] and "⚠" not in lines[3]
-    assert "empty" in core.render_board([])
+    assert "(matrix)" not in out and "← here" not in out
+
+
+def test_board_more_lists_all():
+    out = core.render_board(_rows(), NOW, full=True)
+    print("\n--- !ball more ---\n" + out)
+    lines = out.splitlines()
+    assert sum(1 for l in lines if re.match(r"\d+\. ", l)) == 10 and "!ball more" not in out
+    assert lines[-3].startswith("10. Ball Demo 1 ·")
+
+
+def test_board_hide_names():
+    out = core.render_board(_rows(), NOW, hide=True)
+    print("\n--- !ball all hide ---\n" + out)
+    assert "Ball Demo" not in out and "Ops" not in out
+    assert "1. 对话 A · 1h — 问题10？" in out and "卡住了：对话 D" in out
+    en = core.render_board([dict(r, lang="en", note="Which file?") for r in _rows()], NOW, hide=True, full=True)
+    assert "1. Chat A · 1h — Which file?" in en
+
+
+def test_board_empty_and_english():
+    assert core.render_board([], NOW, lang="zh") == "✅ 没有对话在等你"
+    assert core.render_board([], NOW) == "✅ No chats waiting on you"
+    rows = [{"key": "k", "ball": "human", "since": _iso(60), "promise": None,
+             "note": "Done. Should I deploy `main` now?", "label": "Ball (matrix)"},
+            {"key": "j", "ball": "ai", "since": _iso(9), "promise": "I'll check", "note": "", "label": "Ops"}]
+    out = core.render_board(rows, NOW)
+    print("\n--- !ball all (en) ---\n" + out)
+    assert out.splitlines() == ["🏀 1 chat waiting on you", "1. Ball · 1h — Should I deploy main now?",
+                                "⚠️ 1 AI stalled: Ops — reply go there"]
+
+
+def test_board_legacy_long_notes_render_short():
+    long = "asked: " + "我已经把所有的东西都整理好了。" * 5 + "哪个插件？给我名字或一句话说它干啥，我马上出两条。"
+    rows = [{"key": "k", "ball": "human", "since": _iso(60), "promise": None, "note": long, "label": None}]
+    out = core.render_board(rows, NOW)
+    assert out.splitlines()[1].endswith("— 哪个插件？"), out
 
 
 def test_command_handler(env):
-    assert "no turns" in env.ball.command("", source=SRC)
+    assert "no turns" in env.ball.command("", source=SRC).lower()
     dispatch(env)
-    assert env.ball.command("", source=SRC).startswith("🏀 Ball: AI · ")
-    assert env.ball.command("all").startswith("🏀 Ball board — 0 waiting on you, 1 with AI")
-    assert "no chat thread" in env.ball.command("")
+    assert env.ball.command("", source=SRC).startswith("🤖 AI is working · ")
+    assert env.ball.command("all") == "✅ No chats waiting on you\n🤖 1 AI working"
+    assert "Not a chat" in env.ball.command("")
+    dispatch(env, "你好")
+    assert env.ball.command("", source=SRC).startswith("🤖 AI 在干活 · ")
+    assert env.ball.command("help").splitlines()[0] == "球在谁手里？— 告诉你哪些 AI 对话在等你。"
+    env.ball.on_post_llm_call(session_id="sid-1", assistant_response="改好了。要我写进哪个文件？")
+    out = env.ball.command("", source=SRC)
+    print("\n--- !ball ---\n" + out)
+    assert out.endswith("\n它问你：要我写进哪个文件？")
+    assert "对话 A" in env.ball.command("all hide") and "对话 A" in env.ball.command("more hide")
+
+
+def test_language_config_forces(env):
+    dispatch(env, "你好")
+    env.ball.ctx.config["language"] = "en"
+    assert env.ball.command("", source=SRC).startswith("🤖 AI is working")
+
+
+def test_note_stored_short(env):
+    dispatch(env)
+    env.ball.on_post_llm_call(session_id="sid-1", assistant_response="x" * 3000 + ". Which file?")
+    assert env.store.get(TKEY)["note"] == "Which file?"
+    env.store.set(TKEY, "human", note="y" * 500)
+    assert len(env.store.get(TKEY)["note"]) == 80
 
 
 def test_register_matches_manifest(tmp_path):
@@ -328,7 +406,7 @@ def test_bang_ball_reports_state_before_query(env):
     env.store.set(TKEY, "human", note="replied", since="2026-11-11T00:19:12+00:00")
     dispatch(env, "/ball")  # what the Matrix adapter turns `!ball` into
     out = env.ball.command("", source=SRC, session_key=env.skey, session_id="sid-1")
-    assert out.startswith("🏀 Ball: you · ") and "replied" in out and "you spoke" not in out
+    assert out.startswith("🏀 Your move · ") and "replied" in out and "you spoke" not in out
 
 
 def test_command_detection_is_strict():
@@ -380,15 +458,10 @@ def test_board_shows_label_not_raw_id(env):
     src = NS(platform="matrix", chat_id="!YJ9Hide:srv", thread_id=None, profile=None, chat_name="Ball",
              chat_type="group")
     env.ball.on_pre_gateway_dispatch(event=NS(text="hi", source=src), session_store=env.ss)
-    env.ball.on_pre_gateway_dispatch(event=NS(text="hi", source=SRC), session_store=env.ss)
+    env.store.set(core.thread_key(src), "human", note="Should I merge?")
     board = env.ball.command("all", source=src)
-    assert "Ball (matrix) — you spoke ← here" in board
-    assert "!YJ9Hide" not in board and "!room" not in board and "vesper:" not in board
-    assert board.count("← here") == 1
-    # label survives later writes that do not carry a source
-    env.store.set(core.thread_key(src), "human", note="x" * 200)
-    line = [l for l in env.ball.command("all").splitlines() if "Ball (matrix)" in l][0]
-    assert line.endswith("…") and len(line.split(" — ", 1)[1]) == 60
+    assert "1. Ball · " in board and "Should I merge?" in board
+    assert "!YJ9Hide" not in board and "!room" not in board and "vesper:" not in board and "(matrix)" not in board
 
 
 def test_legacy_db_migrates_label_column(dbpath):
@@ -402,7 +475,18 @@ def test_legacy_db_migrates_label_column(dbpath):
     rows = s.all()
     assert rows[0]["note"] == "asked: q" and rows[0]["label"] is None
     board = core.render_board(rows)
-    assert "matrix · #" in board and "!old" not in board
+    assert "matrix · #" in board and "!old" not in board and board.endswith("— q")
+
+
+def test_legacy_db_migrates_lang_column(dbpath):
+    conn = sqlite3.connect(dbpath)
+    conn.execute("CREATE TABLE threads (key TEXT PRIMARY KEY, ball TEXT NOT NULL, since TEXT NOT NULL, "
+                 "promise TEXT, note TEXT NOT NULL DEFAULT '', updated TEXT NOT NULL, label TEXT)")
+    conn.execute("INSERT INTO threads VALUES('k', 'human', '2026-01-01T00:00:00+00:00', NULL, 'asked: 行吗？', 'u', 'L')")
+    conn.commit(); conn.close()
+    s = bp.Store(lambda: sqlite3.connect(dbpath, check_same_thread=False))
+    r = s.all()[0]
+    assert (r["note"], r["label"], r["lang"]) == ("asked: 行吗？", "L", None)
 
 
 def _topic_src(topic):
@@ -441,7 +525,7 @@ _h = judge.heuristic
 ])
 def test_question_beats_promise(text):
     r = _h(text)
-    assert r["ball"] == "human" and r["promise"] is None and r["note"].startswith("asked")
+    assert r["ball"] == "human" and r["promise"] is None and r["note"] != "replied" and len(r["note"]) <= 40
 
 @_pt.mark.parametrize("text", ["Tests are running, I'll report back.", "我马上去跑一遍。"])
 def test_pure_promise_is_ai(text):
@@ -451,3 +535,27 @@ def test_pure_promise_is_ai(text):
 @_pt.mark.parametrize("text", ["The fix is in judge.py line 34.", "已完成，测试全部通过。"])
 def test_plain_answer_replied(text):
     assert _h(text) == {"ball": "human", "promise": None, "note": "replied"}
+
+
+EXTRACT = [
+    ("哪个插件？给我名字或一句话说它干啥，我马上出两条。", "哪个插件？"),
+    ("改好了。要我写进哪个文件？", "要我写进哪个文件？"),
+    ("**要不要我顺便更新文档？**", "要不要我顺便更新文档？"),
+    ("告诉我目标分支，我会继续。", "告诉我目标分支，我会继续"),
+    ("已完成，测试全部通过。", "replied"),
+    ("Done. Should I edit `judge.py`? I will follow up.", "Should I edit judge.py?"),
+    ("The fix is in judge.py line 34.", "replied"),
+    ("Tests pass.\n\n- Want me to open a PR for [the branch](http://x)?", "Want me to open a PR for the branch?"),
+    ("Let me know which option you prefer.", "Let me know which option you prefer"),
+    ("asked: Should I deploy?", "Should I deploy?"),
+    ("", "replied"),
+    ("要不要我顺便把文档也更新一下，以及把 README 里的所有示例全部重新跑一遍再贴上来？",
+     "以及把 README 里的所有示例全部重新跑一遍再贴上来？"),
+    ("Q" * 60 + "?", "Q" * 39 + "…"),
+]
+
+
+@pytest.mark.parametrize("text,note", EXTRACT)
+def test_extract_note(text, note):
+    out = judge.extract_note(text)
+    assert out == note and len(out) <= 40
