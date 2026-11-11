@@ -124,9 +124,12 @@ L = {
                nothread="🏀 这里不是对话。试试 !ball all", head="🏀 {n} 个对话在等你", empty="✅ 没有对话在等你",
                more="…还有 {n} 个：!ball more", stall_line="⚠️ {n} 个 AI 卡住了：{names} — 去那里回 go",
                work_line="🤖 {n} 个 AI 在干活", sep="、", chat="对话 {c}", short_replied="已回复",
+               done_one="✅ 已答完 · {age} — 无需你处理", done_line="💤 {n} 个已答完，无需你处理",
+               done_head="💤 {n} 个已答完，无需你处理", done_empty="💤 没有已答完的对话",
                short_interrupted="已中断",
                help="球在谁手里？— 告诉你哪些 AI 对话在等你。\n"
                     "!ball — 这个对话轮到谁\n!ball all — 等你的前 3 个\n!ball more — 全部等你的对话\n"
+                    "!ball done — 已答完、无需你处理的对话\n"
                     "!ball all hide — 隐藏对话名（方便截图）"),
     "en": dict(your="🏀 Your move", working="🤖 AI is working", stalled="⚠️ AI stalled", calm="nothing to do",
                asks="It asks: ", replied="It replied — your turn to read", interrupted="Interrupted — your call",
@@ -135,9 +138,12 @@ L = {
                head="🏀 {n} chat{s} waiting on you", empty="✅ No chats waiting on you",
                more="…{n} more: !ball more", stall_line="⚠️ {n} AI stalled: {names} — reply go there",
                work_line="🤖 {n} AI working", sep=", ", chat="Chat {c}", short_replied="replied",
+               done_one="✅ Done · {age} — nothing needed", done_line="💤 {n} done, nothing needed",
+               done_head="💤 {n} done, nothing needed", done_empty="💤 No done chats",
                short_interrupted="interrupted",
                help="Whose turn is it? — shows which AI chats are waiting on you.\n"
                     "!ball — this chat\n!ball all — top 3 waiting on you\n!ball more — every chat waiting on you\n"
+                    "!ball done — chats the AI answered, nothing needed from you\n"
                     "!ball all hide — hide chat names (for screenshots)"),
 }
 
@@ -181,6 +187,14 @@ def short_note(row: dict, lang: str) -> str:
     return t["short_replied"] if q == judge.REPLIED else q
 
 
+def is_done(row: dict) -> bool:
+    """ball=human but the AI just answered and asked nothing: nothing is waiting on the user."""
+    if row.get("ball") != "human":
+        return False
+    note = (row.get("note") or "").strip()
+    return not note.lower().startswith("interrupted") and judge.extract_note(note) == judge.REPLIED
+
+
 def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Optional[str] = None) -> str:
     lang = lang or pick_lang("auto", [], row)
     t = L[lang]
@@ -191,20 +205,22 @@ def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Option
         return f"{t['stalled']} · {age}\n" + t["stall_why"].format(p=judge._cut(row["promise"], 20))
     if row["ball"] == "ai":
         return f"{t['working']} · {age} — {t['calm']}"
+    if is_done(row):
+        return t["done_one"].format(age=age)
     note = (row.get("note") or "").strip()
-    if note.lower().startswith("interrupted"):
-        line2 = t["interrupted"]
-    else:
-        q = judge.extract_note(note)
-        line2 = t["replied"] if q == judge.REPLIED else t["asks"] + q
+    line2 = t["interrupted"] if note.lower().startswith("interrupted") else t["asks"] + judge.extract_note(note)
     return f"{t['your']} · {age}\n{line2}"
 
 
 def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optional[str] = None,
-                 full: bool = False, hide: bool = False) -> str:
+                 full: bool = False, hide: bool = False, done: bool = False,
+                 show_done: bool = False) -> str:
+    """done=True: only the answered-nothing-needed chats; show_done=True: also list them after the waiting ones."""
     lang = lang or pick_lang("auto", rows)
     t = L[lang]
-    waiting = sorted((r for r in rows if r["ball"] == "human"), key=lambda r: r["since"])
+    human = sorted((r for r in rows if r["ball"] == "human"), key=lambda r: r["since"])
+    waiting = [r for r in human if not is_done(r)]
+    finished = [r for r in human if is_done(r)]
     stalled = sorted((r for r in rows if r["ball"] == "ai" and r.get("promise")), key=lambda r: r["since"])
     working = [r for r in rows if r["ball"] == "ai" and not r.get("promise")]
     names: dict[str, str] = {}
@@ -217,6 +233,12 @@ def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optiona
             names[r["key"]] = t["chat"].format(c=chr(65 + i) if i < 26 else str(i + 1))
         return names[r["key"]]
 
+    if done:
+        if not finished:
+            return t["done_empty"]
+        return "\n".join([t["done_head"].format(n=len(finished))] +
+                         [f"{i}. {name(r)} · {fmt_age(r['since'], now)}" for i, r in enumerate(finished, 1)])
+
     out = [t["head"].format(n=len(waiting), s="" if len(waiting) == 1 else "s") if waiting else t["empty"]]
     shown = waiting if full else waiting[:TOP]
     for i, r in enumerate(shown, 1):
@@ -227,6 +249,11 @@ def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optiona
         out.append(t["stall_line"].format(n=len(stalled), names=t["sep"].join(name(r) for r in stalled)))
     if working:
         out.append(t["work_line"].format(n=len(working)))
+    if finished and show_done:
+        out.append(t["done_head"].format(n=len(finished)))
+        out.extend(f"{i}. {name(r)} · {fmt_age(r['since'], now)}" for i, r in enumerate(finished, 1))
+    elif finished:
+        out.append(t["done_line"].format(n=len(finished)))
     return "\n".join(out)
 
 
@@ -384,10 +411,11 @@ class Ball:
         if sub in ("help", "?"):
             row = self.store.get(here) if here else None
             return L[pick_lang(setting, self.store.all(), row)]["help"]
-        if sub in ("all", "board", "more"):
+        if sub in ("all", "board", "more", "done"):
             rows = self.store.all()
             here_row = next((r for r in rows if r["key"] == here), None)
-            return render_board(rows, lang=pick_lang(setting, rows, here_row), full=sub == "more", hide=hide)
+            return render_board(rows, lang=pick_lang(setting, rows, here_row), full=sub == "more", hide=hide,
+                                done=sub == "done", show_done=sub == "more" and "all" in words[1:])
         if not here:
             return L[pick_lang(setting, self.store.all())]["nothread"]
         row = self.store.get(here)

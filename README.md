@@ -19,9 +19,10 @@ Requires Hermes `>=0.23.1`. Restart the gateway to load it.
 
 | Command (Matrix `!ball`, elsewhere `/ball`) | Shows |
 |---|---|
-| `!ball` | this chat: your move / AI working / AI stalled |
+| `!ball` | this chat: your move / done / AI working / AI stalled |
 | `!ball all` | the 3 chats that have waited longest, plus stalled + working counts |
-| `!ball more` | every chat waiting on you |
+| `!ball more` | every chat waiting on you (`!ball more all` also lists the done ones) |
+| `!ball done` | chats the AI answered without asking anything — nothing needed from you |
 | `!ball all hide`, `!ball more hide` | same, chat names replaced by 对话 A/B/C (for screenshots) |
 | `!ball help` | short help |
 
@@ -30,6 +31,9 @@ Requires Hermes `>=0.23.1`. Restart the gateway to load it.
 ```
 🏀 轮到你 · 8m
 它问你：要我写进哪个文件？
+```
+```
+✅ 已答完 · 8m — 无需你处理
 ```
 ```
 🤖 AI 在干活 · 2m — 不用管
@@ -51,6 +55,22 @@ Requires Hermes `>=0.23.1`. Restart the gateway to load it.
 🤖 1 个 AI 在干活
 ```
 
+Only chats where the AI **asked** something count as "waiting on you". Chats where it just answered
+(note `replied`) are *done*: not counted, summarised in one line at the bottom, listed by `!ball done`:
+
+```
+🏀 2 个对话在等你
+1. Ball Demo 2 · 25m — 问题2？
+2. Ball Demo 1 · 15m — 问题1？
+💤 7 个已答完，无需你处理
+```
+```
+💤 3 个已答完，无需你处理
+1. Done 3 · 1h
+2. Done 2 · 1h
+3. Done 1 · 1h
+```
+
 English:
 
 ```
@@ -59,7 +79,8 @@ English:
 ⚠️ 1 AI stalled: Ops — reply go there
 ```
 
-Nothing waiting: `✅ 没有对话在等你` / `✅ No chats waiting on you`.
+Nothing waiting: `✅ 没有对话在等你` / `✅ No chats waiting on you` (plus the done line, e.g. `💤 7 done, nothing needed`).
+English single chat: `✅ Done · 8m — nothing needed`.
 
 **AI stalled** means the AI ended its turn with a promise ("I'll report back", "马上") but its loop has stopped —
 nothing will happen until you reply (e.g. `go`).

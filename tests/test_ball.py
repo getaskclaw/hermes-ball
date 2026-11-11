@@ -286,7 +286,7 @@ def test_render_one():
     assert core.render_one({"ball": "ai", "since": _iso(5), "promise": "I'll check", "note": ""}, NOW) == \
         "⚠️ AI stalled · 5m\nsaid \u201cI'll check\u201d but went quiet · reply go to nudge it"
     assert core.render_one({"ball": "human", "since": _iso(1), "promise": None, "note": "replied", "lang": "zh"},
-                           NOW) == "🏀 轮到你 · 1m\n它已回复，等你看"
+                           NOW) == "✅ 已答完 · 1m — 无需你处理"
     assert "no turns" in core.render_one(None).lower()
 
 
@@ -406,7 +406,7 @@ def test_bang_ball_reports_state_before_query(env):
     env.store.set(TKEY, "human", note="replied", since="2026-11-11T00:19:12+00:00")
     dispatch(env, "/ball")  # what the Matrix adapter turns `!ball` into
     out = env.ball.command("", source=SRC, session_key=env.skey, session_id="sid-1")
-    assert out.startswith("🏀 Your move · ") and "replied" in out and "you spoke" not in out
+    assert out.startswith("✅ Done · ") and "nothing needed" in out and "you spoke" not in out
 
 
 def test_command_detection_is_strict():
@@ -559,3 +559,67 @@ EXTRACT = [
 def test_extract_note(text, note):
     out = judge.extract_note(text)
     assert out == note and len(out) <= 40
+
+
+# ── asked vs replied ──
+def _done_rows(n=7):
+    return [{"key": f"p:matrix:!d{i}:", "ball": "human", "since": _iso(100 + i), "promise": None,
+             "note": "replied", "label": f"Done {i} (matrix)", "lang": "zh"} for i in range(1, n + 1)]
+
+
+def test_board_waiting_vs_done_counts():
+    rows = _rows()[:2] + _done_rows()
+    out = core.render_board(rows, NOW)
+    print("\n--- !ball all (asked vs replied) ---\n" + out)
+    assert out.splitlines() == [
+        "🏀 2 个对话在等你",
+        "1. Ball Demo 2 · 25m — 问题2？",
+        "2. Ball Demo 1 · 15m — 问题1？",
+        "💤 7 个已答完，无需你处理",
+    ]
+    assert "Done 1" not in out and "已回复" not in out
+
+
+def test_board_interrupted_still_waiting():
+    rows = [{"key": "k", "ball": "human", "since": _iso(5), "promise": None, "note": "interrupted: x",
+             "label": "A", "lang": "zh"}]
+    assert core.render_board(rows, NOW).splitlines()[:2] == ["🏀 1 个对话在等你", "1. A · 5m — 已中断"]
+
+
+def test_board_all_done_empty_waiting():
+    out = core.render_board(_done_rows(7), NOW)
+    assert out.splitlines() == ["✅ 没有对话在等你", "💤 7 个已答完，无需你处理"]
+    en = core.render_board([dict(r, lang="en") for r in _done_rows(7)], NOW)
+    assert en.splitlines() == ["✅ No chats waiting on you", "💤 7 done, nothing needed"]
+
+
+def test_board_done_view_and_more_all():
+    rows = _rows()[:1] + _done_rows(3)
+    d = core.render_board(rows, NOW, done=True)
+    print("\n--- !ball done ---\n" + d)
+    assert d.splitlines() == ["💤 3 个已答完，无需你处理", "1. Done 3 · 1h", "2. Done 2 · 1h", "3. Done 1 · 1h"]
+    assert core.render_board(_rows()[:1], NOW, done=True) == "💤 没有已答完的对话"
+    m = core.render_board(rows, NOW, full=True, show_done=True).splitlines()
+    assert m[0] == "🏀 1 个对话在等你" and m[-4:] == d.splitlines() and "无需你处理" in m[-4]
+    hid = core.render_board(rows, NOW, done=True, hide=True)
+    assert "Done" not in hid and "1. 对话 A · 1h" in hid
+    hid2 = core.render_board(rows, NOW, hide=True)
+    assert "Done" not in hid2 and "Ball Demo" not in hid2
+
+
+def test_single_replied_done_line():
+    r = {"ball": "human", "since": _iso(8), "promise": None, "note": "replied"}
+    assert core.render_one(dict(r, lang="zh"), NOW) == "✅ 已答完 · 8m — 无需你处理"
+    assert core.render_one(dict(r, lang="en"), NOW) == "✅ Done · 8m — nothing needed"
+
+
+def test_command_done_and_more_all(env):
+    env.store.set(TKEY, "human", note="replied", label="Here (matrix)", lang="en")
+    env.store.set("p:x:y:", "human", note="Which file?", label="Other (matrix)", lang="en")
+    assert env.ball.command("all", source=SRC, session_key=env.skey, session_id="sid-1").splitlines() == [
+        "🏀 1 chat waiting on you", "1. Other · " + env.ball.command("all").splitlines()[1].split(" · ")[1],
+        "💤 1 done, nothing needed"]
+    assert env.ball.command("done", source=SRC, session_key=env.skey, session_id="sid-1").splitlines()[0] == \
+        "💤 1 done, nothing needed"
+    assert "Here" in env.ball.command("more all", source=SRC, session_key=env.skey, session_id="sid-1")
+    assert "Here" not in env.ball.command("more", source=SRC, session_key=env.skey, session_id="sid-1")
