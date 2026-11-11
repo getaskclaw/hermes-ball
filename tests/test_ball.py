@@ -93,7 +93,7 @@ def test_store_crud(store):
 def test_store_columns_only(store):
     store.set("k", "ai")
     cols = [c[1] for c in store._db().execute("PRAGMA table_info(threads)")]
-    assert cols == ["key", "ball", "since", "promise", "note", "updated"]
+    assert cols == ["key", "ball", "since", "promise", "note", "updated", "label"]
 
 
 def test_store_concurrency(dbpath):
@@ -290,7 +290,7 @@ def test_render_board_order():
     ]
     lines = core.render_board(rows, NOW).splitlines()
     assert lines[0].startswith("🏀 Ball board — 2 waiting on you, 2 with AI")
-    assert [l.split(" · ")[-1].split(" ")[0] for l in lines[1:]] == ["c", "b", "d", "a"]
+    assert [l.split(" · ")[-1].split(" ")[0] for l in lines[1:]] == [core._short_hash(k) for k in "cbda"]
     assert "⚠" in lines[4] and "⚠" not in lines[3]
     assert "empty" in core.render_board([])
 
@@ -363,3 +363,43 @@ def test_turn_end_after_hot_load_is_logged_not_silent(env, caplog):
     dispatch(env, "/ball")  # first inbound (even a command) teaches the store; next turn end maps
     env.ball.on_post_llm_call(session_id="sid-1", assistant_response="done")
     assert env.store.get(TKEY)["ball"] == "human"
+
+
+# ── labels ──
+def test_thread_label_sources():
+    assert core.thread_label(NS(platform="matrix", chat_id="!YJ9Hide:srv", chat_name="Ball", chat_type="group",
+                                thread_id=None)) == "Ball (matrix)"
+    assert core.thread_label(NS(platform=NS(value="telegram"), chat_id="123", chat_name=None, chat_type="dm",
+                                user_name=None, thread_id=None)) == "DM (telegram)"
+    lab = core.thread_label(NS(platform="matrix", chat_id="!YJ9Hide:srv", chat_name=None, chat_type="group",
+                               thread_id="$evt"))
+    assert lab.startswith("matrix · #") and "YJ9" not in lab and "$evt" not in lab
+
+
+def test_board_shows_label_not_raw_id(env):
+    src = NS(platform="matrix", chat_id="!YJ9Hide:srv", thread_id=None, profile=None, chat_name="Ball",
+             chat_type="group")
+    env.ball.on_pre_gateway_dispatch(event=NS(text="hi", source=src), session_store=env.ss)
+    env.ball.on_pre_gateway_dispatch(event=NS(text="hi", source=SRC), session_store=env.ss)
+    board = env.ball.command("all", source=src)
+    assert "Ball (matrix) — you spoke ← here" in board
+    assert "!YJ9Hide" not in board and "!room" not in board and "vesper:" not in board
+    assert board.count("← here") == 1
+    # label survives later writes that do not carry a source
+    env.store.set(core.thread_key(src), "human", note="x" * 200)
+    line = [l for l in env.ball.command("all").splitlines() if "Ball (matrix)" in l][0]
+    assert line.endswith("…") and len(line.split(" — ", 1)[1]) == 60
+
+
+def test_legacy_db_migrates_label_column(dbpath):
+    conn = sqlite3.connect(dbpath)
+    conn.execute("CREATE TABLE threads (key TEXT PRIMARY KEY, ball TEXT NOT NULL, since TEXT NOT NULL, "
+                 "promise TEXT, note TEXT NOT NULL DEFAULT '', updated TEXT NOT NULL)")
+    conn.execute("INSERT INTO threads VALUES('default:matrix:!old:srv:', 'human', '2026-01-01T00:00:00+00:00', "
+                 "NULL, 'asked: q', 'u')")
+    conn.commit(); conn.close()
+    s = bp.Store(lambda: sqlite3.connect(dbpath, check_same_thread=False))
+    rows = s.all()
+    assert rows[0]["note"] == "asked: q" and rows[0]["label"] is None
+    board = core.render_board(rows)
+    assert "matrix · #" in board and "!old" not in board

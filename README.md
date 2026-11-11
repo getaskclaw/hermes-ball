@@ -23,6 +23,17 @@ Requires Hermes `>=0.23.1`. Restart the gateway to load it.
 | `/ball` (Matrix: `!ball`) | this thread, e.g. `🏀 Ball: you · 3m — asked: Should I deploy?` |
 | `/ball all` | the board: threads waiting on you first, then oldest first; age, `⚠` empty-promise flag, note |
 
+Sample `/ball all`:
+
+```
+🏀 Ball board — 1 waiting on you, 2 with AI
+you ·   1h · Ball (matrix) — asked: Should I deploy?
+AI  ·   5m ⚠ · DM (telegram) — promised: I'll check the logs… ← here
+AI  ·   2d · matrix · #a1b2 — you spoke
+```
+
+Threads are labelled from the chat's public name (`SessionSource.chat_name`, e.g. the Matrix room name); DMs without a name show `DM (platform)`; otherwise `platform · #hash` (short hash of the chat id — raw ids are never shown). Notes are cut to 60 chars; `← here` marks the thread you asked from.
+
 ## How the ball moves
 
 | Event (Hermes hook) | Ball |

@@ -12,8 +12,10 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS threads (
     since TEXT NOT NULL,
     promise TEXT,
     note TEXT NOT NULL DEFAULT '',
-    updated TEXT NOT NULL
+    updated TEXT NOT NULL,
+    label TEXT
 )"""
+COLS = ("key", "ball", "since", "promise", "note", "updated", "label")
 NOTE_MAX = 200
 
 
@@ -40,30 +42,38 @@ class Store:
             except sqlite3.Error:
                 pass
             conn.execute(SCHEMA)
+            have = {c[1] for c in conn.execute("PRAGMA table_info(threads)")}
+            if "label" not in have:  # migrate pre-label DBs in place; never drops data
+                conn.execute("ALTER TABLE threads ADD COLUMN label TEXT")
             conn.commit()
             self._conn = conn
         return self._conn
 
     def set(self, key: str, ball: str, *, promise: Optional[str] = None, note: str = "",
-            since: Optional[str] = None) -> dict:
-        """Upsert. ``since`` is kept when the ball does not change hands (unless given)."""
+            since: Optional[str] = None, label: Optional[str] = None) -> dict:
+        """Upsert. ``since`` is kept when the ball does not change hands (unless given).
+        ``label`` (human-readable thread name) is kept when not given."""
         if ball not in ("ai", "human"):
             raise ValueError(f"bad ball {ball!r}")
         note = (note or "").replace("\n", " ").strip()[:NOTE_MAX]
         promise = promise[:NOTE_MAX] if promise else None
+        label = (label or "").replace("\n", " ").strip()[:NOTE_MAX] or None
         ts = now_iso(precise=True)
         with self._lock:
             db = self._db()
             cur = self.get(key)
             if since is None:
                 since = cur["since"] if cur and cur["ball"] == ball else now_iso()
+            if label is None and cur:
+                label = cur.get("label")
             db.execute(
-                "INSERT INTO threads(key,ball,since,promise,note,updated) VALUES(?,?,?,?,?,?) "
+                "INSERT INTO threads(key,ball,since,promise,note,updated,label) VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET ball=excluded.ball, since=excluded.since, "
-                "promise=excluded.promise, note=excluded.note, updated=excluded.updated",
-                (key, ball, since, promise, note, ts))
+                "promise=excluded.promise, note=excluded.note, updated=excluded.updated, label=excluded.label",
+                (key, ball, since, promise, note, ts, label))
             db.commit()
-            return {"key": key, "ball": ball, "since": since, "promise": promise, "note": note, "updated": ts}
+            return {"key": key, "ball": ball, "since": since, "promise": promise, "note": note, "updated": ts,
+                    "label": label}
 
     def set_if(self, key: str, expected_updated: str, ball: str, **kw) -> Optional[dict]:
         """Atomic compare-and-set: write only if the row's ``updated`` still equals the stamp."""
@@ -76,12 +86,12 @@ class Store:
     def get(self, key: str) -> Optional[dict]:
         with self._lock:
             row = self._db().execute(
-                "SELECT key,ball,since,promise,note,updated FROM threads WHERE key=?", (key,)).fetchone()
+                "SELECT key,ball,since,promise,note,updated,label FROM threads WHERE key=?", (key,)).fetchone()
         return _row(row) if row else None
 
     def all(self) -> list[dict]:
         with self._lock:
-            rows = self._db().execute("SELECT key,ball,since,promise,note,updated FROM threads").fetchall()
+            rows = self._db().execute("SELECT key,ball,since,promise,note,updated,label FROM threads").fetchall()
         return [_row(r) for r in rows]
 
     def delete(self, key: str) -> bool:
@@ -92,4 +102,4 @@ class Store:
 
 
 def _row(r) -> dict:
-    return dict(zip(("key", "ball", "since", "promise", "note", "updated"), tuple(r)))
+    return dict(zip(COLS, tuple(r)))

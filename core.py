@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import os
 import threading
@@ -45,6 +46,46 @@ def thread_key(source) -> str:
                      _s(getattr(source, "chat_id", None)), _s(getattr(source, "thread_id", None))])
 
 
+def _short_hash(v: str) -> str:
+    return "#" + hashlib.sha1(v.encode("utf-8", "replace")).hexdigest()[:4]
+
+
+def thread_label(source) -> str:
+    """Human-readable name from public SessionSource fields; never the raw chat id.
+
+    chat_name (room/channel/group display name) > DM (user_name or 'DM') > platform · #hash(chat_id).
+    """
+    platform = _s(getattr(source, "platform", None)) or "?"
+    name = _s(getattr(source, "chat_name", None)).strip()
+    chat_type = _s(getattr(source, "chat_type", None))
+    if name:
+        label = f"{name} ({platform})"
+    elif chat_type == "dm":
+        user = _s(getattr(source, "user_name", None)).strip()
+        label = f"DM {user} ({platform})" if user else f"DM ({platform})"
+    else:
+        label = f"{platform} · {_short_hash(_s(getattr(source, 'chat_id', None)))}"
+    tid = _s(getattr(source, "thread_id", None))
+    if tid:
+        label += f" · thread {_short_hash(tid)}"
+    return label
+
+
+def label_from_key(key: str) -> str:
+    """Fallback for rows stored before labels existed: ``profile:platform:chat_id:thread_id``."""
+    parts = (key or "").split(":")
+    if len(parts) < 3:
+        return _short_hash(key or "")
+    platform, chat, tid = parts[1] or "?", ":".join(parts[2:-1]) if len(parts) > 3 else parts[2], \
+        parts[-1] if len(parts) > 3 else ""
+    out = f"{platform} · {_short_hash(chat)}"
+    return out + (f" · thread {_short_hash(tid)}" if tid else "")
+
+
+def _trunc(s: str, n: int = 60) -> str:
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
 def is_command(text: Any) -> bool:
     """True for gateway commands (`/x ...`, or a raw `!x` if a platform did not rewrite it)."""
     t = (text or "").lstrip() if isinstance(text, str) else ""
@@ -83,7 +124,7 @@ def render_one(row: Optional[dict], now: Optional[datetime] = None) -> str:
     return s
 
 
-def render_board(rows: list[dict], now: Optional[datetime] = None) -> str:
+def render_board(rows: list[dict], now: Optional[datetime] = None, here: Optional[str] = None) -> str:
     if not rows:
         return "🏀 Ball board is empty — no threads tracked yet."
     rows = sorted(rows, key=lambda r: (0 if r["ball"] == "human" else 1, r["since"]))
@@ -91,8 +132,11 @@ def render_board(rows: list[dict], now: Optional[datetime] = None) -> str:
     out = [f"🏀 Ball board — {waiting} waiting on you, {len(rows) - waiting} with AI"]
     for r in rows:
         flag = " ⚠" if r["ball"] == "ai" and r.get("promise") else ""
-        note = f" — {r['note']}" if r.get("note") else ""
-        out.append(f"{'you' if r['ball'] == 'human' else 'AI '} · {fmt_age(r['since'], now):>4}{flag} · {r['key']}{note}")
+        note = f" — {_trunc(r['note'])}" if r.get("note") else ""
+        label = r.get("label") or label_from_key(r["key"])
+        mark = " ← here" if here and r["key"] == here else ""
+        out.append(f"{'you' if r['ball'] == 'human' else 'AI '} · {fmt_age(r['since'], now):>4}{flag} · "
+                   f"{label}{note}{mark}")
     return "\n".join(out)
 
 
@@ -163,7 +207,7 @@ class Ball:
             # are control traffic, not a conversational turn: they must not move the ball, so `/ball` reports
             # the state as it was *before* the query.
             return None
-        self.store.set(thread_key(source), "ai", note="you spoke")
+        self.store.set(thread_key(source), "ai", note="you spoke", label=thread_label(source))
         return None  # never rewrite/skip the message
 
     @safe
@@ -238,9 +282,10 @@ class Ball:
     @safe
     def command(self, raw_args: str = "", source=None, session_id=None, session_key=None, **_):
         args = (raw_args or "").strip().lower()
-        if args in ("all", "board"):
-            return render_board(self.store.all())
         tkey = None
+        if args in ("all", "board"):
+            here = thread_key(source) if source is not None else self._resolve(session_key, session_id)
+            return render_board(self.store.all(), here=here)
         if source is not None:
             tkey = thread_key(source)
             self._learn(tkey, session_key=session_key, session_id=session_id)
