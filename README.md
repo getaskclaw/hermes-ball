@@ -1,5 +1,10 @@
 # hermes-ball
 
+![Ball demo: board shows chats waiting on you; answer one, board drops by one](demo/video/ball-demo.gif)
+
+*Demo workspace, fictional projects, unedited plugin output. [MP4 (720p)](demo/video/ball-demo-720.mp4)*
+
+
 **Ball shows which of your AI chats are waiting on you, and what each one asked.**
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin. It never sends messages, never pings,
