@@ -729,7 +729,7 @@ def test_promise_detected(text):
     "I'll report the findings here. Which format do you want?",
     "我稍后去查，要不要先重启？",
 ])
-def test_question_beats_promise(text):
+def test_question_beats_broadened_promise(text):
     assert judge.heuristic(text)["state"] == "asked"
 
 
