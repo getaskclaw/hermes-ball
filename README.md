@@ -8,22 +8,25 @@
 **Ball shows which of your AI chats are waiting on you, and what each one asked.**
 
 Ball is an add-on for [Hermes Agent](https://github.com/NousResearch/hermes-agent), an open-source AI assistant
-you talk to from chat apps such as Matrix and Telegram. Type `!ball all` in any chat (`/ball all` on Telegram) and
+you talk to from chat apps such as Matrix and Telegram. On Matrix type `!ball all` (on other platforms, `/ball all`) and
 Ball lists the chats where the AI asked you something and is still waiting for your reply. Answer one and it drops
 off the list.
 
-Ball only speaks when you type the command. It never messages you on its own and never changes your chats.
-The question it shows is copied from the AI's last question and cut to 40 characters, using fixed rules, not an AI
-summary.
+Ball only speaks when you type the command. It never messages you on its own and never changes what the AI sees
+or says. The question it shows is the AI's last question, copied by fixed rules (not an AI summary): stored up to
+80 characters, shown up to 40.
+
+**Tested on Matrix only.** Other Hermes chat platforms use the same hooks and should work, but are untested.
 
 ## Install
 
 ```bash
 hermes plugins install https://github.com/getaskclaw/hermes-ball
-hermes plugins validate ~/.hermes/plugins/ball        # optional
+hermes plugins validate ~/.hermes/plugins/ball        # optional; installs under the plugin name `ball`
+hermes gateway restart                                # load it
 ```
 
-Requires Hermes `>=0.23.1`. Restart the gateway to load it.
+Requires Hermes `>=0.23.1`.
 
 ## Commands
 
@@ -51,7 +54,7 @@ It asks: Which file should I write to?
 ```
 ```
 ⚠️ AI stalled · 2h
-Said "I'll report back" but nothing happened · reply go to nudge it
+said “I'll report back” but went quiet · reply go to nudge it
 ```
 
 `!ball all`:
@@ -67,8 +70,10 @@ Said "I'll report back" but nothing happened · reply go to nudge it
 💤 3 done, nothing needed
 ```
 
-Only chats where the AI **asked** something count as "waiting on you". Chats where it just answered
-(note `replied`) are *done*: not counted, summarised in one line at the bottom, listed by `!ball done`:
+In all output, "reply go" means: send the word `go` in that chat to nudge the AI.
+
+Chats count as "waiting on you" when the AI **asked** something or its turn was interrupted. Chats where it just
+answered are *done*: not counted, summarised in one line at the bottom, listed by `!ball done`:
 
 ```
 💤 3 done, nothing needed
@@ -81,6 +86,17 @@ Nothing waiting: `✅ No chats waiting on you` (plus the done line, e.g. `💤 7
 
 **AI stalled** means the AI ended its turn with a promise ("I'll report back") but its loop has stopped —
 nothing will happen until you reply (e.g. `go`).
+
+| Stored `state` | `ball` | Shown as | Counts as waiting on you? |
+|---|---|---|---|
+| `asked` | you | 🏀 Your move — *It asks: …* | yes |
+| `interrupted` | you | 🏀 Your move — *Interrupted — your call* | yes |
+| `replied` | you | ✅ Done / 💤 done line | no |
+| AI's turn, or a promise younger than `promise_grace_min` | AI | 🤖 AI is working | no |
+| AI holds a promise past the grace period | AI | ⚠️ AI stalled | flagged separately |
+| AI turn silent past `working_timeout_min` | AI | ⚠️ AI quiet — may have stopped (restart?) | flagged as stalled |
+
+"Stalled" and "quiet" are not stored; they are computed from the stored row and its age when you ask.
 
 **Language**: `language: auto` (default) replies in Chinese if your last message in that chat (or the stored
 question) contains CJK characters, otherwise English. Set `zh` or `en` to force.
@@ -98,17 +114,23 @@ Chat names come from the chat's public name (e.g. the Matrix room name); DMs sho
 | turn ends (`post_llm_call`) | judged: question or decision ask → you (*asked*); promise in the last 2 sentences → AI + ⚠; otherwise you (*replied* = done) |
 | interrupt, `/stop` (`agent_loop_stopped`) | you (`interrupted: <reason>`) |
 
-The turn-end judge is a deterministic phrase heuristic (English and Chinese). Optionally an LLM judge can refine it.
-The verdict is decided from the **full** reply and stored as `state` (`asked` / `replied` / `working` /
-`interrupted`); the short note is display-only, so truncating a long question never turns it into "Done".
-A question always beats a promise. Promise phrases (only counted in the final 2 sentences): `I'll report /
-update you / let you know / get back / follow up / check (and tell you) / look into`, `will post here`, `stand by`,
-… plus the Chinese equivalents (e.g. "later", "right away", "I will check") ….
-Courtesy closers are not asks: "Let me know if you have any questions", "Feel free to reach out", "Happy to help",
-"Any questions?" and their Chinese equivalents ("if there is a problem, tell me") are ignored, so a finished reply
-ending with one shows as *replied*. A real ask in the same reply still wins ("Should I merge? Let me know if...").
-A promise younger than `promise_grace_min` (default 2) shows as "AI working", not stalled.
-Measured on `tests/fixtures/endings.jsonl` (88 hand-labelled fictional endings written by the author, ~half English / ~half Chinese, not real-world data): *asked* precision 1.00, recall 1.00 — the set was written while tuning the rules, so expect lower on real chats.
+How the turn-end judge works:
+
+- It is a deterministic phrase heuristic (English and Chinese). An optional LLM judge can refine it.
+- The verdict is decided from the **full** reply and stored as `state`; the short note is display-only, so
+  truncating a long question never turns it into "Done".
+- A question always beats a promise.
+- Promise phrases count only in the final 2 sentences: `I'll report / update you / let you know / get back /
+  follow up / check / look into`, `will post here`, `stand by`, and Chinese ones such as `稍后` (later),
+  `马上` (right away), `我会检查` (I will check).
+- Courtesy closers are not asks: "Let me know if you have any questions", "Feel free to reach out",
+  "Happy to help", "Any questions?", and Chinese ones such as `有问题随时告诉我` (tell me if there's a problem).
+  A finished reply ending with one shows as *done*. A real ask in the same reply still wins
+  ("Should I merge? Let me know if...").
+- A promise younger than `promise_grace_min` (default 2 min) shows as "AI working", not stalled.
+- Tests: `tests/fixtures/endings.jsonl` holds 88 hand-labelled endings (about half English, half Chinese),
+  written by the author while tuning the rules. They are regression tests, not an accuracy measurement;
+  expect misjudgements on real chats.
 
 ## Configuration
 
@@ -121,7 +143,7 @@ plugins:
         llm_judge: false        # default; true = ask the active model after each turn
         llm_judge_timeout: 20   # seconds; on timeout/bad JSON the heuristic stands, note = "judge failed"
         stale_days: 7           # board hides chats with no activity for N days (0 = never); hidden, not deleted
-        working_timeout_min: 30 # "AI working" older than this shows as "AI quiet — may have stopped" (0 = off)
+        working_timeout_min: 30 # "AI working" older than this shows as "AI quiet — may have stopped (restart?)" (0 = off)
         promise_grace_min: 2    # a promise younger than this shows as "AI working", not stalled (0 = off)
         board_in_groups: here   # here = in a group/channel room, !ball all/more/done shows only that room; all = every chat
 ```
@@ -151,31 +173,27 @@ questions are never posted where other people can read them. DMs and the CLI sho
 
 ## Limits
 
-- Ball tracks *threads* as Hermes routes them. In DMs the whole DM is one thread; group sessions follow your
-  `group_sessions_per_user` / thread settings, but the Ball key is per chat+thread, not per user.
-- Tested against Matrix semantics (`!ball`); other platforms should work but are untested.
-- The empty-promise flag is a flag, not enforcement — Ball never wakes the agent up or nudges anyone.
-- Turn ends on non-gateway surfaces (CLI/TUI) are ignored: there is no chat thread to attach them to.
-- Commands (`/ball`, Matrix `!ball`, any `/x` or `!x`) never move the ball; `/ball` shows the state as it was
-  before you asked.
-- `since` is when the ball last **changed hands**. Another message from the same holder (e.g. you writing twice
-  while it is with the AI) does not reset it — the age answers "how long has it been with them".
-- Ball maps a turn end (`post_llm_call` only carries a `session_id`) to a chat through the gateway's
-  `session_store`, which it first receives with an inbound message. A reply that finishes right after Ball is
-  installed/hot-loaded, before any message has arrived, is not recorded (logged at INFO as "turn not recorded").
-- Left/forgotten rooms: Hermes exposes no public plugin signal for "room left" or "session removed" on Matrix, so
-  Ball cannot drop those rows itself. They disappear from the board after `stale_days`; `!ball forget` in the chat
-  removes one for good (once you have left a room you cannot run it there; the row just stays hidden).
-- Pending clarify / question prompts: a raw `!ball` (or ` /ball` with leading spaces) is rewritten to `/ball` in
-  `pre_gateway_dispatch`, so the gateway's clarify text-intercept (which skips text starting with `/`) never takes
-  it as the answer. **Limit:** while the agent turn is running, a plugin command is not a built-in, so the
-  adapter's busy path neither bypasses the active session for it nor fires `pre_gateway_dispatch`; Hermes routes
-  `/ball` like any busy follow-up (steer/queue per `busy_input_mode`). Ball cannot intercept that path.
-- The heuristic is phrase-based and will misjudge sometimes; `/ball` is a hint, not a contract.
-- If the gateway restarts mid-turn, the turn end never arrives. After `working_timeout_min` (default 30) a
-  "working" chat is shown as "AI quiet — may have stopped (restart?)" and counted as stalled. Display only.
-- If Ball can't write its database (disk full, read-only), Hermes is unaffected; `!ball` shows a warning line
-  with the time of the first failure until a write succeeds again. It is logged once per failure episode.
+The three that matter most:
+
+- **It guesses.** The heuristic is phrase-based and will misjudge sometimes; `!ball` is a hint, not a contract.
+- **Matrix only tested.** Other platforms should work but are untested.
+- **It never wakes anything.** "AI stalled" is a flag, not enforcement: Ball never nudges the agent or anyone.
+
+Smaller ones:
+
+- Ball tracks *threads* as Hermes routes them. In DMs the whole DM is one thread; in groups the key is per
+  chat+thread, not per user.
+- CLI/TUI turns are ignored: there is no chat thread to attach them to.
+- Commands (`!ball`, `/ball`, any `/x` or `!x`) never move the ball; `!ball` shows the state from before you asked.
+- `since` is when the ball last **changed hands**; a second message from the same side does not reset it.
+- A reply that finishes right after install, before any new message arrives, is not recorded.
+- Rooms you left are not removed automatically (Hermes has no "room left" signal for plugins); they hide after
+  `stale_days`. `!ball forget` removes the current chat for good.
+- If the gateway restarts mid-turn, the turn end never arrives; after `working_timeout_min` the chat shows as
+  "AI quiet — may have stopped (restart?)".
+- If Ball can't write its database, Hermes is unaffected; `!ball` shows a warning line until a write succeeds.
+- While the AI is mid-turn, `!ball` is handled like any other follow-up message (queued or steered per your
+  `busy_input_mode`), so the answer may arrive after the turn ends.
 
 ## Development
 
