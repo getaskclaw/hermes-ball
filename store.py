@@ -1,6 +1,7 @@
 """SQLite store: one row per chat thread. No transcripts — only ball/since/promise/note."""
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -22,6 +23,11 @@ STATES = ("asked", "replied", "working", "interrupted")
 _SEL = "SELECT " + ",".join(COLS) + " FROM threads"
 NOTE_MAX = 200
 SHORT_NOTE_MAX = 80  # notes are a short question, never the full reply
+logger = logging.getLogger("hermes_plugins.ball")
+
+
+class StoreWriteError(sqlite3.OperationalError):
+    """A write failed (disk full, read-only DB...). Already recorded and logged once by the Store."""
 
 
 def now_iso(precise: bool = False) -> str:
@@ -38,6 +44,24 @@ class Store:
         self._connect = connect or _default_connect
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = threading.RLock()
+        # In-memory only (the DB is what is failing): (time, short error) of the current failure episode.
+        self.write_failure: Optional[tuple] = None
+
+    def _write_failed(self, e: Exception) -> StoreWriteError:
+        err = " ".join(str(e).split())[:60] or type(e).__name__
+        if self.write_failure is None:  # log once per episode, not every turn
+            logger.warning("ball: could not save to its database (%s); board may be out of date", err)
+            self.write_failure = (datetime.now(timezone.utc), err)
+        if isinstance(e, StoreWriteError):
+            return e
+        out = StoreWriteError(err)
+        out.__cause__ = e
+        return out
+
+    def _write_ok(self) -> None:
+        if self.write_failure is not None:
+            logger.warning("ball: database writes recovered")
+            self.write_failure = None
 
     def _db(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -79,6 +103,13 @@ class Store:
         label = (label or "").replace("\n", " ").strip()[:NOTE_MAX] or None
         ts = now_iso(precise=True)
         with self._lock:
+            try:
+                return self._set(key, ball, promise, note, since, label, lang, state, ts)
+            except sqlite3.Error as e:
+                raise self._write_failed(e) from e
+
+    def _set(self, key, ball, promise, note, since, label, lang, state, ts) -> dict:
+        with self._lock:
             db = self._db()
             cur = self.get(key)
             if since is None:
@@ -97,6 +128,7 @@ class Store:
                 "state=excluded.state",
                 (key, ball, since, promise, note, ts, label, lang, state))
             db.commit()
+            self._write_ok()
             return {"key": key, "ball": ball, "since": since, "promise": promise, "note": note, "updated": ts,
                     "label": label, "lang": lang, "state": state}
 
@@ -121,8 +153,12 @@ class Store:
 
     def delete(self, key: str) -> bool:
         with self._lock:
-            cur = self._db().execute("DELETE FROM threads WHERE key=?", (key,))
-            self._db().commit()
+            try:
+                cur = self._db().execute("DELETE FROM threads WHERE key=?", (key,))
+                self._db().commit()
+            except sqlite3.Error as e:
+                raise self._write_failed(e) from e
+            self._write_ok()
             return cur.rowcount > 0
 
 

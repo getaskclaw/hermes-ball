@@ -31,3 +31,7 @@ config_schema:
     type: int
     default: 7
     description: "Hide chats with no activity for this many days from the board (0 = never). Hidden, not deleted; !ball forget deletes."
+  working_timeout_min:
+    type: int
+    default: 30
+    description: "Show a 'working' chat as quiet/maybe stopped after this many minutes without a turn end (e.g. gateway restarted mid-turn). 0 = off. Display only."

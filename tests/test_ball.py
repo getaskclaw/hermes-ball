@@ -188,7 +188,7 @@ def test_hook_exceptions_swallowed(env):
     assert env.ball.on_human_input_request(session_key=env.skey) is None
     assert env.ball.on_human_input_resolved(session_key=env.skey) is None
     assert env.ball.on_agent_loop_stopped(session_key=env.skey) is None
-    assert env.ball.command("all") is None
+    assert env.ball.command("all") == "⚠️ Ball couldn't read its database (boom)"  # short error, not nothing
     # malformed event
     assert env.ball.on_pre_gateway_dispatch(event=object()) is None
     assert env.ball.on_pre_gateway_dispatch(event=NS(source=NS(platform=None)), gateway=Boom(), session_store=Boom()) is None
@@ -738,3 +738,94 @@ def test_old_promise_not_in_last_two_sentences_is_replied():
             "All 94 tests pass now.")
     v = judge.heuristic(text)
     assert v["ball"] == "human" and v["state"] == "replied"
+
+
+# ── restart mid-turn: quiet working rows ──
+def _age_row(store, key, minutes):
+    old = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    db = store._db()
+    db.execute("UPDATE threads SET since=?, updated=? WHERE key=?", (old, old, key))
+    db.commit()
+
+
+def test_old_working_row_renders_quiet(store):
+    ball = bp.Ball(store, FakeCtx())
+    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="do the thing"))
+    k = core.thread_key(SRC)
+    assert "AI is working" in ball.command("", source=SRC)
+    _age_row(store, k, 45)
+    before = store.get(k)
+    out = ball.command("", source=SRC)
+    assert out == "⚠️ AI quiet 45m — may have stopped (restart?) · reply go to nudge it"
+    board = ball.command("all", source=SRC)
+    assert "⚠️ 1 AI stalled:" in board and "AI working" not in board
+    assert store.get(k) == before  # display only, no DB writes
+
+
+def test_quiet_timeout_zero_off_and_zh(store):
+    ball = bp.Ball(store, FakeCtx({"working_timeout_min": 0}))
+    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="开始吧"))
+    _age_row(store, core.thread_key(SRC), 600)
+    assert "AI 在干活" in ball.command("", source=SRC)
+    ball.ctx.config["working_timeout_min"] = 30
+    assert ball.command("", source=SRC).startswith("⚠️ AI 10h 没动静")
+    assert "1 个 AI 卡住了" in ball.command("all", source=SRC)
+
+
+def test_quiet_does_not_touch_interrupted_or_asked(store):
+    k = core.thread_key(SRC)
+    store.set(k, "human", note="interrupted: x", state="interrupted")
+    _age_row(store, k, 120)
+    assert "Interrupted" in core.render_one(store.get(k), lang="en")
+    store.set(k, "human", note="pick A or B?", state="asked")
+    _age_row(store, k, 120)
+    assert "Your move" in core.render_one(store.get(k), lang="en")
+
+
+# ── write failures (disk full / read-only) ──
+def test_write_failure_banner_logged_once_and_recovers(dbpath, caplog):
+    flag = {"ro": False}
+
+    def connect():
+        if flag["ro"]:
+            return sqlite3.connect(f"file:{dbpath}?mode=ro", uri=True, check_same_thread=False)
+        return sqlite3.connect(dbpath, check_same_thread=False)
+
+    store = bp.Store(connect)
+    ball = bp.Ball(store, FakeCtx())
+    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="hi"))
+    store._conn.close(); store._conn = None
+    flag["ro"] = True
+    caplog.set_level("DEBUG", logger="hermes_plugins.ball")
+    for _ in range(3):  # hooks never raise
+        assert ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="again")) is None
+        assert ball.on_post_llm_call(session_id="x", assistant_response="done.") is None
+    warns = [r for r in caplog.records if r.levelname == "WARNING" and "could not save" in r.getMessage()]
+    assert len(warns) == 1
+    assert store.write_failure is not None
+    for sub in ("", "all", "more", "done"):
+        out = ball.command(sub, source=SRC)
+        assert re.match(r"⚠️ Ball couldn't save since \d\d:\d\d UTC \(.+, disk full\?\) — board may be out of date\n",
+                        out), out
+    assert "couldn't save" not in ball.command("help", source=SRC)
+    store._conn.close(); store._conn = None
+    flag["ro"] = False
+    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="back"))
+    assert store.write_failure is None
+    assert not ball.command("", source=SRC).startswith("⚠️ Ball")
+
+
+def test_write_failure_connect_raises_then_read_fails(store, dbpath):
+    ball = bp.Ball(bp.Store(lambda: (_ for _ in ()).throw(sqlite3.OperationalError("database or disk is full"))),
+                   FakeCtx())
+    assert ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="hi")) is None
+    assert ball.store.write_failure[1] == "database or disk is full"
+    out = ball.command("", source=SRC)
+    assert out == "⚠️ Ball couldn't read its database (database or disk is full)"
+
+
+def test_write_failure_banner_zh(store):
+    ball = bp.Ball(store, FakeCtx({"language": "zh"}))
+    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="你好"))
+    store.write_failure = (datetime(2026, 1, 1, 9, 5, tzinfo=timezone.utc), "disk I/O error")
+    assert ball.command("", source=SRC).startswith("⚠️ Ball 自 09:05 UTC 起无法保存（disk I/O error，磁盘满了？）— 看板可能过时\n")

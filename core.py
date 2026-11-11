@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import judge
-from .store import Store
+from .store import Store, StoreWriteError
 
 logger = logging.getLogger("hermes_plugins.ball")
 
@@ -22,6 +22,9 @@ def safe(fn):
     def wrapper(*a, **kw):
         try:
             return fn(*a, **kw)
+        except StoreWriteError:  # recorded + logged once per episode by the Store; shown on !ball
+            logger.debug("ball: %s write failed", fn.__name__)
+            return None
         except Exception:  # observe-only: never raise into Hermes
             logger.warning("ball: %s failed", fn.__name__, exc_info=True)
             return None
@@ -127,6 +130,9 @@ L = {
                work_line="🤖 {n} 个 AI 在干活", sep="、", chat="对话 {c}", short_replied="已回复",
                done_one="✅ 已答完 · {age} — 无需你处理", done_line="💤 {n} 个已答完，无需你处理",
                done_head="💤 {n} 个已答完，无需你处理", done_empty="💤 没有已答完的对话",
+               quiet="⚠️ AI {age} 没动静 — 可能已停止（重启？）· 回一句 go 催它",
+               write_fail="⚠️ Ball 自 {t} UTC 起无法保存（{err}，磁盘满了？）— 看板可能过时",
+               read_fail="⚠️ Ball 读不到它的数据库（{err}）",
                short_interrupted="已中断", stale_line="🗄 {n} 个 {d} 天无动静的对话已隐藏（在那个对话里 !ball forget 可删除）",
                forgot="🗑 已从看板删除这个对话", forgot_none="这个对话没有记录",
                help="球在谁手里？— 告诉你哪些 AI 对话在等你。\n"
@@ -142,6 +148,9 @@ L = {
                work_line="🤖 {n} AI working", sep=", ", chat="Chat {c}", short_replied="replied",
                done_one="✅ Done · {age} — nothing needed", done_line="💤 {n} done, nothing needed",
                done_head="💤 {n} done, nothing needed", done_empty="💤 No done chats",
+               quiet="⚠️ AI quiet {age} — may have stopped (restart?) · reply go to nudge it",
+               write_fail="⚠️ Ball couldn't save since {t} UTC ({err}, disk full?) — board may be out of date",
+               read_fail="⚠️ Ball couldn't read its database ({err})",
                short_interrupted="interrupted", stale_line="🗄 {n} idle >{d}d hidden (!ball forget in that chat removes it)",
                forgot="🗑 Removed this chat from the board", forgot_none="Nothing tracked for this chat",
                help="Whose turn is it? — shows which AI chats are waiting on you.\n"
@@ -226,7 +235,20 @@ def split_stale(rows: list, stale_days: float, now: Optional[datetime] = None) -
     return fresh, stale
 
 
-def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Optional[str] = None) -> str:
+WORKING_TIMEOUT_MIN = 30
+
+
+def is_quiet(row: dict, timeout_min: float = WORKING_TIMEOUT_MIN, now: Optional[datetime] = None) -> bool:
+    """A 'working' row (ball ai, no promise) untouched for longer than the timeout: the turn probably died
+    (e.g. gateway restart mid-turn, so post_llm_call never fired). Display only; the row is not changed."""
+    if not timeout_min or timeout_min <= 0 or row.get("ball") != "ai" or row.get("promise"):
+        return False
+    t = _parse(row.get("updated")) or _parse(row.get("since"))
+    return t is not None and t < (now or datetime.now(timezone.utc)) - timedelta(minutes=timeout_min)
+
+
+def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Optional[str] = None,
+               working_timeout_min: float = WORKING_TIMEOUT_MIN) -> str:
     lang = lang or pick_lang("auto", [], row)
     t = L[lang]
     if not row:
@@ -234,6 +256,8 @@ def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Option
     age = fmt_age(row["since"], now)
     if row["ball"] == "ai" and row.get("promise"):
         return f"{t['stalled']} · {age}\n" + t["stall_why"].format(p=judge._cut(row["promise"], 20))
+    if is_quiet(row, working_timeout_min, now):
+        return t["quiet"].format(age=fmt_age(row.get("updated") or row["since"], now))
     if row["ball"] == "ai":
         return f"{t['working']} · {age} — {t['calm']}"
     if is_done(row):
@@ -244,15 +268,19 @@ def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Option
 
 def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optional[str] = None,
                  full: bool = False, hide: bool = False, done: bool = False,
-                 show_done: bool = False, stale: int = 0, stale_days: float = 0) -> str:
+                 show_done: bool = False, stale: int = 0, stale_days: float = 0,
+                 working_timeout_min: float = WORKING_TIMEOUT_MIN) -> str:
     """done=True: only the answered-nothing-needed chats; show_done=True: also list them after the waiting ones."""
     lang = lang or pick_lang("auto", rows)
     t = L[lang]
     human = sorted((r for r in rows if r["ball"] == "human"), key=lambda r: r["since"])
     waiting = [r for r in human if not is_done(r)]
     finished = [r for r in human if is_done(r)]
-    stalled = sorted((r for r in rows if r["ball"] == "ai" and r.get("promise")), key=lambda r: r["since"])
-    working = [r for r in rows if r["ball"] == "ai" and not r.get("promise")]
+    stalled = sorted((r for r in rows if r["ball"] == "ai" and (r.get("promise") or
+                                                                 is_quiet(r, working_timeout_min, now))),
+                     key=lambda r: r["since"])
+    working = [r for r in rows if r["ball"] == "ai" and not r.get("promise")
+               and not is_quiet(r, working_timeout_min, now)]
     names: dict[str, str] = {}
 
     def name(r):
@@ -420,6 +448,12 @@ class Ball:
         except (TypeError, ValueError):
             return 7.0
 
+    def _working_timeout(self) -> float:
+        try:
+            return max(0.0, float(self._cfg("working_timeout_min", WORKING_TIMEOUT_MIN)))
+        except (TypeError, ValueError):
+            return float(WORKING_TIMEOUT_MIN)
+
     def _cfg(self, key, default):
         try:
             v = self.ctx.get_config(key, default) if self.ctx is not None else default
@@ -456,6 +490,21 @@ class Ball:
     def command(self, raw_args: str = "", source=None, session_id=None, session_key=None, **_):
         words = (raw_args or "").strip().lower().split()
         sub = words[0] if words else ""
+        try:
+            out = self._command(words, source, session_id, session_key)
+        except Exception as e:  # even reading failed: say so instead of returning nothing
+            logger.warning("ball: command failed", exc_info=True)
+            lang = str(self._cfg("language", "auto")).lower()
+            err = " ".join(str(e).split())[:60] or type(e).__name__
+            return L[lang if lang in ("zh", "en") else "en"]["read_fail"].format(err=err)
+        fail = getattr(self.store, "write_failure", None)
+        if fail and out and sub in ("", "all", "board", "more", "done"):
+            lang = "zh" if has_cjk(out) else "en"
+            out = L[lang]["write_fail"].format(t=fail[0].strftime("%H:%M"), err=fail[1]) + "\n" + out
+        return out
+
+    def _command(self, words, source, session_id, session_key):
+        sub = words[0] if words else ""
         hide = "hide" in words[1:]
         here = thread_key(source) if source is not None else self._resolve(session_key, session_id)
         if source is not None and here:
@@ -476,8 +525,10 @@ class Ball:
             here_row = next((r for r in all_rows if r["key"] == here), None)
             return render_board(rows, lang=pick_lang(setting, all_rows, here_row), full=sub == "more", hide=hide,
                                 done=sub == "done", show_done=sub == "more" and "all" in words[1:],
-                                stale=len(stale), stale_days=stale_days)
+                                stale=len(stale), stale_days=stale_days,
+                                working_timeout_min=self._working_timeout())
         if not here:
             return L[pick_lang(setting, self.store.all())]["nothread"]
         row = self.store.get(here)
-        return render_one(row, lang=pick_lang(setting, self.store.all() if not row else [], row))
+        return render_one(row, lang=pick_lang(setting, self.store.all() if not row else [], row),
+                          working_timeout_min=self._working_timeout())

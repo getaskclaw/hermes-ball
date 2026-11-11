@@ -116,6 +116,7 @@ plugins:
         llm_judge: false        # default; true = ask the active model after each turn
         llm_judge_timeout: 20   # seconds; on timeout/bad JSON the heuristic stands, note = "judge failed"
         stale_days: 7           # board hides chats with no activity for N days (0 = never); hidden, not deleted
+        working_timeout_min: 30 # "AI working" older than this shows as "AI quiet — may have stopped" (0 = off)
 ```
 
 ## What is stored
@@ -160,6 +161,10 @@ Rows are only deleted by `!ball forget`; `stale_days` only hides them from `!bal
   adapter's busy path neither bypasses the active session for it nor fires `pre_gateway_dispatch`; Hermes routes
   `/ball` like any busy follow-up (steer/queue per `busy_input_mode`). Ball cannot intercept that path.
 - The heuristic is phrase-based and will misjudge sometimes; `/ball` is a hint, not a contract.
+- If the gateway restarts mid-turn, the turn end never arrives. After `working_timeout_min` (default 30) a
+  "working" chat is shown as "AI quiet — may have stopped (restart?)" and counted as stalled. Display only.
+- If Ball can't write its database (disk full, read-only), Hermes is unaffected; `!ball` shows a warning line
+  with the time of the first failure until a write succeeds again. It is logged once per failure episode.
 
 ## Development
 
