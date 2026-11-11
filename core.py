@@ -124,7 +124,7 @@ BALL_CMD = re.compile(r"^\s*[!/]ball(?=$|\s)(.*)$", re.I | re.S)
 L = {
     "zh": dict(your="🏀 轮到你", working="🤖 AI 在干活", stalled="⚠️ AI 卡住了", calm="不用管",
                asks="它问你：", replied="它已回复，等你看", interrupted="已中断，等你决定",
-               stall_why="说了「{p}」但没动静 · 回一句 go 催它", none="🏀 这个对话还没有记录。",
+               stall_why="说了「{p}」但没动静 · 回一句 go 催它", none="🏀 这个聊天还没有记录：Hermes 回过话之后才开始记。想看所有聊天，发 !ball all",
                nothread="🏀 这里不是对话。试试 !ball all", head="🏀 {n} 个对话在等你", empty="✅ 没有对话在等你",
                more="…还有 {n} 个：!ball more", stall_line="⚠️ {n} 个 AI 卡住了：{names} — 去那里回 go",
                work_line="🤖 {n} 个 AI 在干活", sep="、", chat="对话 {c}", short_replied="已回复",
@@ -143,7 +143,7 @@ L = {
     "en": dict(your="🏀 Your move", working="🤖 AI is working", stalled="⚠️ AI stalled", calm="nothing to do",
                asks="It asks: ", replied="It replied — your turn to read", interrupted="Interrupted — your call",
                stall_why="said \u201c{p}\u201d but went quiet · reply go to nudge it",
-               none="🏀 No turns tracked in this chat yet.", nothread="🏀 Not a chat. Try !ball all",
+               none="🏀 Nothing tracked here yet: Ball starts once Hermes replies in this chat. To see every chat, send !ball all", nothread="🏀 Not a chat. Try !ball all",
                head="🏀 {n} chat{s} waiting on you", empty="✅ No chats waiting on you",
                more="…{n} more: !ball more", stall_line="⚠️ {n} AI stalled: {names} — reply go there",
                work_line="🤖 {n} AI working", sep=", ", chat="Chat {c}", short_replied="replied",

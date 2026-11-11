@@ -287,7 +287,7 @@ def test_render_one():
         "⚠️ AI stalled · 5m\nsaid \u201cI'll check\u201d but went quiet · reply go to nudge it"
     assert core.render_one({"ball": "human", "since": _iso(1), "promise": None, "note": "replied", "lang": "zh"},
                            NOW) == "✅ 已答完 · 1m — 无需你处理"
-    assert "no turns" in core.render_one(None).lower()
+    assert "nothing tracked" in core.render_one(None).lower()
 
 
 def _rows():
@@ -352,7 +352,7 @@ def test_board_legacy_long_notes_render_short():
 
 
 def test_command_handler(env):
-    assert "no turns" in env.ball.command("", source=SRC).lower()
+    assert "nothing tracked" in env.ball.command("", source=SRC).lower()
     dispatch(env)
     assert env.ball.command("", source=SRC).startswith("🤖 AI is working · ")
     assert env.ball.command("all") == "✅ No chats waiting on you\n🤖 1 AI working"
@@ -929,3 +929,9 @@ def test_group_board_zh_hidden_line(env):
     a, _ = _two_rooms(env)
     env.ball.ctx = FakeCtx(config={"language": "zh"})
     assert "🔒 这里隐藏了 1 个其他对话 — 在私聊里用 !ball all 查看" in env.ball.command("all", source=a)
+
+
+def test_none_message_points_to_all():
+    from ball_plugin.core import L
+    assert "!ball all" in L["en"]["none"] and "Hermes replies" in L["en"]["none"]
+    assert "!ball all" in L["zh"]["none"]
