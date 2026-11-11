@@ -7,9 +7,14 @@
 
 **Ball shows which of your AI chats are waiting on you, and what each one asked.**
 
-A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin. It never sends messages, never pings,
-never rewrites anything — you ask, it answers. No AI summarizer: the "what it asked" line is the last question
-sentence of the AI's reply, cut to 40 characters, picked by plain rules.
+Ball is an add-on for [Hermes Agent](https://github.com/NousResearch/hermes-agent), an open-source AI assistant
+you talk to from chat apps such as Matrix and Telegram. Type `!ball all` in any chat (`/ball all` on Telegram) and
+Ball lists the chats where the AI asked you something and is still waiting for your reply. Answer one and it drops
+off the list.
+
+Ball only speaks when you type the command. It never messages you on its own and never changes your chats.
+The question it shows is copied from the AI's last question and cut to 40 characters, using fixed rules, not an AI
+summary.
 
 ## Install
 
