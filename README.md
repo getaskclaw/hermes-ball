@@ -127,6 +127,7 @@ If you turn on `llm_judge`, the last 2000 characters of the AI's reply go to **y
 ## Development
 
 ```bash
+pip install -r requirements-dev.txt
 python -m pytest -q
 hermes plugins validate . --install-deps
 ```

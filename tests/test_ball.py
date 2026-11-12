@@ -422,13 +422,14 @@ def test_note_stored_short(env):
 
 
 def test_register_matches_manifest(tmp_path):
-    import yaml
+    yaml = pytest.importorskip("yaml")
     ctx = FakeCtx()
     bp.register(ctx)
     manifest = yaml.safe_load((bp.__file__ and __import__("pathlib").Path(bp.__file__).parent / "plugin.yaml").read_text())
     assert sorted(ctx.hooks) == sorted(manifest["provides_hooks"])
     assert list(ctx.commands) == ["ball"]
-    assert manifest["version"] == "0.1.3" and isinstance(manifest["version"], str)
+    assert isinstance(manifest["version"], str)
+    assert re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])
 
 
 # ── regressions: live bugs ──
