@@ -7,14 +7,14 @@
 **Ball shows which of your AI chats are waiting on you, and what each one asked.**
 
 Ball is a plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent). If you talk to Hermes in many
-chats, it's easy to forget one where the AI asked you a question. Type `!ball all` and Ball lists every chat where
+chats, it's easy to forget one where the AI asked you a question. Type `!ball` and Ball lists the chats where
 the AI is waiting for your reply. Answer one and it drops off the list.
 
 - **Passive.** Ball only answers when you type its command. It never sends messages on its own and never
   changes what the AI sees or says.
 - **Local.** No network calls by default. One small SQLite file.
 - **Used daily on Matrix and Telegram** (the author's own setup). Other platforms use the same Hermes hooks but
-  are untested. On Matrix the command is `!ball`; elsewhere it is `/ball`, and Ball's own hints use the right one. Telegram DM topics arrive without their topic name, so Ball shows Hermes' session title instead, marked with `~` (e.g. `· ~fleet map`).
+  are untested. On Matrix the command is `!ball`; elsewhere it is `/ball`, and Ball's own hints use the right one. Telegram DM topics arrive without their topic name, so Ball shows Hermes' session title for them instead.
 
 ## Install
 
@@ -30,26 +30,30 @@ To remove: `hermes plugins uninstall ball`.
 
 | Command | Shows |
 |---|---|
-| `!ball` | this chat's status |
-| `!ball all` | the 3 chats that have waited longest, plus counts |
-| `!ball more` | every chat waiting on you |
-| `!ball done` | list the 💤 done chats (the AI finished, nothing needed) |
+| `!ball` | the 3 chats that have waited longest, plus counts |
+| `!ball all` | every chat waiting on you |
+| `!ball here` | this chat's status |
+| `!ball done` | the 10 latest 💤 answered chats (`!ball done all`: every one) |
 | `!ball all hide` | same as `!ball all`, chat names replaced by Chat A/B/C (for screenshots) |
 | `!ball forget` | delete this chat's row |
 | `!ball forget stale` | delete every chat hidden for being idle (DM only) |
 | `!ball help` | short help |
 
-`!ball all`:
+Cron jobs, API calls and delegated runs (Hermes platform `local`) are left off chat boards: they aren't chats
+you can answer, and their questions already reach you through the job's own delivery. `show_local: true` lists them.
+
+`!ball`:
 
 ```
 🏀 4 chats waiting on you
 1. Blog draft · 2d — Delete the old drafts?
 2. Photo sorter · 1d — Should I rename the files?
 3. Tax notes · 5h — Which file should I write to?
-…1 more: !ball more
-⚠️ 1 AI stalled: Deploy helper — send "go" there
+…1 more: `!ball all`
+⚠️ 1 AI stalled — send "go" there
+1. Deploy helper · 40m
 🤖 1 AI working
-💤 3 done, nothing needed
+💤 3 answered — nothing for you to do
 ```
 
 ## What each status means
@@ -91,6 +95,7 @@ plugins:
         working_timeout_min: 30 # "AI working" this long with no reply shows as stalled (0 = off)
         promise_grace_min: 2    # minutes before a promise counts as stalled (0 = off)
         board_in_groups: here   # here = in a group room, show only that room; all = show every chat
+        show_local: false       # true = also list cron/API/delegated runs (platform 'local')
 ```
 
 `language: auto` replies in Chinese if your last message contains Chinese characters, otherwise in English
@@ -106,8 +111,9 @@ Ball stores one row per chat in `<HERMES_HOME>/plugin-data/ball/data.db`:
 
 It never stores your messages or the full AI reply.
 
-Outside its own file, Ball reads only Hermes' in-process session routing and, read-only, the session's origin
-(platform, chat, thread) from Hermes' own `state.db` when a reply arrives right after a plugin reload. By default (`board_in_groups: here`), `!ball all` in a group
+Outside its own file, Ball reads only Hermes' in-process session routing and, read-only, two things from
+Hermes' own `state.db`: the session's origin (platform, chat, thread) when a reply arrives right after a plugin
+reload, and the session title Hermes generated, used as the name of a Telegram topic or other chat that has none. By default (`board_in_groups: here`), `!ball all` in a group
 room shows only that room, so other chats' names and questions aren't posted where others can read them.
 Setting it to `all` shows every chat everywhere.
 

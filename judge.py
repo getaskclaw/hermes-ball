@@ -158,6 +158,16 @@ def _is_promise(sent: str):
     return PROMISE.search(sent) or PROMISE2.search(sent)
 
 
+def _ask_note(text: str) -> str:
+    """Note for an ASKED verdict. Instruction-style asks ("reply go and I'll ...") have no '?', so
+    extract_note finds nothing; fall back to the last sentence instead of the 'replied' sentinel."""
+    n = extract_note(text)
+    if n != REPLIED:
+        return n
+    last = _clean(_last_line(text))
+    return _cut(last) if last else "?"
+
+
 def heuristic(text: str) -> dict:
     """-> {"ball", "promise", "note", "state"}. Decided from the FULL text, before any truncation.
 
@@ -175,14 +185,14 @@ def heuristic(text: str) -> dict:
     # final sentences decide first: an ask there wins, else a promise there (an earlier '?' does not beat it)
     final = _last_sentences(tail, PROMISE_SENTENCES)
     if any(_is_ask(x) for x in final):
-        return {"ball": "human", "promise": None, "note": extract_note(text), "state": ASKED}
+        return {"ball": "human", "promise": None, "note": _ask_note(text), "state": ASKED}
     for sent in reversed(final):
         m = _is_promise(sent)
         if m:
             return {"ball": "ai", "promise": m.group(0), "note": _cut(m.group(0)), "state": WORKING}
     if QUESTION_END.search(last) or _asks_question(tail) or DECISION.search(NOT_ASK.sub("", tail)) \
             or ASK_INSTR.search(tail[-300:]):
-        return {"ball": "human", "promise": None, "note": extract_note(text), "state": ASKED}
+        return {"ball": "human", "promise": None, "note": _ask_note(text), "state": ASKED}
     return {"ball": "human", "promise": None, "note": "replied", "state": REPLIED_STATE}
 
 

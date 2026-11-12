@@ -1,5 +1,5 @@
 name: ball
-version: "0.1.4"
+version: "0.2.0"
 description: "Ball shows which of your AI chats are waiting on you, and what each one asked."
 author: "askclaw"
 license: MIT
@@ -44,3 +44,7 @@ config_schema:
     type: string
     default: here
     description: "In a group/channel room, '!ball all/more/done' shows only that room (here) or every chat (all). DMs and CLI always show every chat."
+  show_local:
+    type: bool
+    default: false
+    description: "Also list 'local' sessions (cron jobs, API and delegated runs on the host) on chat boards. Off by default: they are not chats you can answer, and their asks already reach you through the job's own delivery."

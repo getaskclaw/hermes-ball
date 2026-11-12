@@ -92,8 +92,8 @@ def thread_label(source, title_hint: str = "") -> str:
         hint = " ".join(_s(title_hint).split())
         if topic:
             label += f" · {_trunc(topic, 40)}"
-        elif hint:  # "~" = Hermes' own session title, not the platform's topic name (which Hermes didn't supply)
-            label += f" · ~{_trunc(hint, 40)}"
+        elif hint:  # Hermes' own session title, used when the platform gives no topic name
+            label += " · " + _trunc(hint, 40)
         else:
             label += f" · thread {_short_hash(tid)}"
     return label
@@ -118,6 +118,14 @@ def is_command(text: Any) -> bool:
     """True for gateway commands (`/x ...`, or a raw `!x` if a platform did not rewrite it)."""
     t = (text or "").lstrip() if isinstance(text, str) else ""
     return len(t) > 1 and t[0] in "/!" and (t[1].isalpha() or t[1] == "_")
+
+
+_ZH_UNIT = {"s": "秒", "m": "分钟", "h": "小时", "d": "天"}
+
+
+def zh_age(age: str) -> str:
+    """'13m' -> '13分钟' (Chinese boards read better with words than unit letters)."""
+    return age[:-1] + _ZH_UNIT[age[-1]] if age[-1:] in _ZH_UNIT and age[:-1].isdigit() else age
 
 
 def fmt_age(since: str, now: Optional[datetime] = None) -> str:
@@ -146,42 +154,44 @@ BALL_CMD = re.compile(r"^\s*[!/]ball(?=$|\s)(.*)$", re.I | re.S)
 L = {
     "zh": dict(your="🏀 轮到你", working="🤖 AI 在干活", stalled="⚠️ AI 卡住了", calm="不用管",
                asks="它问你：", replied="它已回复，等你看", interrupted="已中断，等你决定",
-               stall_why="说了「{p}」但没动静 · 回一句 go 催它", none="🏀 这个聊天还没有记录：Hermes 回过话之后才开始记。想看所有聊天，发 !ball all",
-               nothread="🏀 这里不是对话。试试 !ball all", head="🏀 {n} 个对话在等你", empty="✅ 没有对话在等你",
-               more="…还有 {n} 个：!ball more", stall_line="⚠️ {n} 个 AI 卡住了：{names} — 去那里回 go",
+               stall_why="说了「{p}」但没动静 · 回一句 go 催它", none="🏀 这个聊天还没有记录：Hermes 回过话之后才开始记。想看等你的对话，发 !ball",
+               nothread="🏀 这里不是对话。试试 !ball", head="🏀 {n} 个对话在等你", empty="✅ 没有对话在等你",
+               more="…还有 {n} 个：!ball all", stall_head="⚠️ {n} 个 AI 卡住了 — 去那里回 go", stall_more="…还有 {n} 个卡住的：!ball all",
                work_line="🤖 {n} 个 AI 在干活", sep="、", chat="对话 {c}", short_replied="已回复",
-               done_one="✅ 已答完 · {age} — 无需你处理", done_line="💤 {n} 个已答完，无需你处理",
-               done_head="💤 {n} 个已答完，无需你处理", done_empty="💤 没有已答完的对话",
+               done_one="✅ 已答完 · {age} — 不用你回", done_line="💤 {n} 个已答完，不用你回",
+               done_head="💤 {n} 个已答完，不用你回", done_age="{age}前", done_empty="💤 没有已答完的对话",
+               done_more="…还有 {n} 个更早的：!ball done all",
                quiet="⚠️ AI {age} 没动静 — 可能已停止（重启？）· 回一句 go 催它",
                write_fail="⚠️ Ball 自 {t} UTC 起无法保存（{err}，磁盘满了？）— 看板可能过时",
                read_fail="⚠️ Ball 读不到它的数据库（{err}）",
                origin_fail="⚠️ 自 {t} UTC 起 Ball 无法读取 Hermes 会话来源（{err}），部分回合可能漏记",
-               short_interrupted="已中断", forgot_stale="🗑 已删除 {n} 个隐藏的闲置对话", forget_stale_dm="请在私聊里发 !ball forget stale", stale_line="🗄 {n} 个 {d} 天无动静的对话已隐藏（!ball forget stale 可删除）",
+               short_interrupted="已中断", cli="自动任务", short_ask="在等你回复", forgot_stale="🗑 已删除 {n} 个隐藏的闲置对话", forget_stale_dm="请在私聊里发 !ball forget stale", stale_line="🗄 {n} 个 {d} 天无动静的对话已隐藏（!ball forget stale 可删除）",
                hidden_here="🔒 这里隐藏了 {n} 个其他对话 — 在私聊里用 !ball all 查看",
                forgot="🗑 已从看板删除这个对话", forgot_none="这个对话没有记录",
                help="球在谁手里？— 告诉你哪些 AI 对话在等你。\n"
-                    "!ball — 这个对话轮到谁\n!ball all — 等你的前 3 个\n!ball more — 全部等你的对话\n"
-                    "!ball done — 已答完、无需你处理的对话\n"
+                    "!ball — 等你的前 3 个和各项计数\n!ball all — 全部等你的对话\n!ball here — 这个对话轮到谁\n"
+                    "!ball done — 最近 10 个已答完的对话（!ball done all 看全部）\n"
                     "!ball all hide — 隐藏对话名（方便截图）\n!ball forget — 从看板删除这个对话\n!ball forget stale — 删除所有已隐藏的闲置对话"),
     "en": dict(your="🏀 Your move", working="🤖 AI is working", stalled="⚠️ AI stalled", calm="nothing to do",
                asks="It asks: ", replied="It replied — your turn to read", interrupted="Interrupted — your call",
                stall_why="said \u201c{p}\u201d but went quiet · send \"go\" to nudge it",
-               none="🏀 Nothing tracked here yet: Ball starts once Hermes replies in this chat. To see every chat, send !ball all", nothread="🏀 Not a chat. Try !ball all",
+               none="🏀 Nothing tracked here yet: Ball starts once Hermes replies in this chat. To see chats waiting on you, send !ball", nothread="🏀 Not a chat. Try !ball",
                head="🏀 {n} chat{s} waiting on you", empty="✅ No chats waiting on you",
-               more="…{n} more: !ball more", stall_line="⚠️ {n} AI stalled: {names} — send \"go\" there",
+               more="…{n} more: !ball all", stall_head="⚠️ {n} AI stalled — send \"go\" there", stall_more="…{n} more stalled: !ball all",
                work_line="🤖 {n} AI working", sep=", ", chat="Chat {c}", short_replied="replied",
-               done_one="✅ Done · {age} — nothing needed", done_line="💤 {n} done, nothing needed",
-               done_head="💤 {n} done, nothing needed", done_empty="💤 No done chats",
+               done_one="✅ Answered · {age} — nothing for you to do", done_line="💤 {n} answered — nothing for you to do",
+               done_head="💤 {n} answered — nothing for you to do", done_age="{age} ago", done_empty="💤 No answered chats",
+               done_more="…{n} older: !ball done all",
                quiet="⚠️ AI quiet {age} — may have stopped (restart?) · send \"go\" to nudge it",
                write_fail="⚠️ Ball couldn't save since {t} UTC ({err}, disk full?) — board may be out of date",
                read_fail="⚠️ Ball couldn't read its database ({err})",
                origin_fail="⚠️ Since {t} UTC Ball can't read Hermes session origins ({err}); some turns may be missed",
-               short_interrupted="interrupted", forgot_stale="🗑 Deleted {n} hidden idle chats", forget_stale_dm="Run !ball forget stale in your DM", stale_line="🗄 {n} idle >{d}d hidden (!ball forget stale deletes them)",
+               short_interrupted="interrupted", cli="auto job", short_ask="waiting for your reply", forgot_stale="🗑 Deleted {n} hidden idle chats", forget_stale_dm="Run !ball forget stale in your DM", stale_line="🗄 {n} idle >{d}d hidden (!ball forget stale deletes them)",
                hidden_here="🔒 {n} other chats hidden here — use !ball all in your DM",
                forgot="🗑 Removed this chat from the board", forgot_none="Nothing tracked for this chat",
                help="Whose turn is it? — shows which AI chats are waiting on you.\n"
-                    "!ball — this chat\n!ball all — top 3 waiting on you\n!ball more — every chat waiting on you\n"
-                    "!ball done — chats the AI answered, nothing needed from you\n"
+                    "!ball — top 3 waiting on you, plus counts\n!ball all — every chat waiting on you\n!ball here — this chat\n"
+                    "!ball done — the 10 latest answered chats (!ball done all: every one)\n"
                     "!ball all hide — hide chat names (for screenshots)\n!ball forget — remove this chat from the board\n!ball forget stale — delete all hidden idle chats"),
 }
 
@@ -198,6 +208,22 @@ def row_lang(row: Optional[dict]) -> Optional[str]:
     return "zh" if has_cjk(row.get("note")) or has_cjk(row.get("promise")) else None
 
 
+_SUBS = r"(?: (?:all|done|more|here|help|forget|stale|hide))*"
+_CMD = re.compile(r"(?<![`\w])!ball" + _SUBS + r"(?![\w`])")
+
+
+def _code_cmds(text: str) -> str:
+    """Hints show commands as code: on Telegram a bare `/ball all` makes only `/ball` tappable (sending the
+    wrong command); a code span is tap-to-copy and keeps the whole command."""
+    return _CMD.sub(lambda m: f"`{m.group(0)}`", text)
+
+
+for _lang in L.values():
+    for _k, _v in list(_lang.items()):
+        if isinstance(_v, str):
+            _lang[_k] = _code_cmds(_v)
+
+
 def pick_lang(setting: Any, rows: list, here: Optional[dict] = None) -> str:
     """language: zh|en forces; auto = this chat's language (user's last message / note), else zh if any chat is."""
     setting = str(setting or "auto").lower()
@@ -209,9 +235,26 @@ def pick_lang(setting: Any, rows: list, here: Optional[dict] = None) -> str:
     return "zh" if any(row_lang(r) == "zh" for r in rows) else "en"
 
 
+def _is_dm_topic(key: str) -> bool:
+    """Telegram DM topic: thread set and a positive (user) chat id; groups/supergroups are negative."""
+    parts = (key or "").split(":")
+    return len(parts) >= 4 and parts[1] == "telegram" and bool(parts[-1]) and parts[-2].isdigit()
+
+
+# Hermes' gateway strips bare local file paths (``~/x.yaml``, ``/a/b.png``) out of replies and tries to send
+# them as attachments (gateway/platforms/base.py extract_local_files); it skips paths inside code spans.
+_PATHLIKE = re.compile(r"(?<![/:\w.`])(?:~/|/|[A-Za-z]:[/\\])[A-Za-z0-9_.~/\\-]*[A-Za-z0-9_/]")  # ASCII path chars only
+
+
+def _protect_paths(label: str) -> str:
+    return _PATHLIKE.sub(lambda m: "`" + m.group(0).replace("`", "") + "`", label)
+
+
 def display_name(row: dict) -> str:
     label = row.get("label") or label_from_key(row["key"])
-    return _PLATFORM_SUFFIX.sub("", label).strip()
+    if _is_dm_topic(row.get("key", "")) and " · " in label:
+        label = label.split(" · ", 1)[1].replace("`", "")  # every DM topic is with you: the "<your name> ·" prefix is noise
+    return _protect_paths(_PLATFORM_SUFFIX.sub("", label).strip())
 
 
 def row_state(row: dict) -> str:
@@ -227,13 +270,26 @@ def _asked_note(row: dict) -> str:
     return q if q != judge.REPLIED else (judge._cut(judge._clean(note)) or "?")
 
 
+_LEAD_IN = re.compile(r"^\s*(?:下一步|接下来|next(?: step)?)\s*[:：]\s*", re.IGNORECASE)
+
+
+def _strip_lead_in(note: str) -> str:
+    """'下一步： 需你拍板' -> '需你拍板': the lead-in carries no information on a one-line board."""
+    out = _LEAD_IN.sub("", note or "")
+    return out or note
+
+
 def short_note(row: dict, lang: str) -> str:
     """What the waiting chat wants, always short."""
     t = L[lang]
     st = row_state(row)
     if st == "interrupted":
         return t["short_interrupted"]
-    return _asked_note(row) if st == "asked" else t["short_replied"]
+    if st == "asked":
+        n = _strip_lead_in(_asked_note(row))
+        # legacy rows: an ask with no extractable question was stored with the 'replied' sentinel
+        return t["short_ask"] if n in (judge.REPLIED, "?", "") else n
+    return t["short_replied"]
 
 
 def is_done(row: dict) -> bool:
@@ -307,18 +363,21 @@ def render_one(row: Optional[dict], now: Optional[datetime] = None, lang: Option
     return f"{t['your']} · {age}\n{line2}"
 
 
+DONE_SHOWN = 10  # /ball done lists the latest 10; `/ball done all` lists every one
+
+
 def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optional[str] = None,
                  full: bool = False, hide: bool = False, done: bool = False,
                  show_done: bool = False, stale: int = 0, stale_days: float = 0,
                  working_timeout_min: float = WORKING_TIMEOUT_MIN, promise_grace_min: float = PROMISE_GRACE_MIN,
-                 hidden: int = 0) -> str:
+                 hidden: int = 0, bold: bool = False) -> str:
     """hidden: rows from other chats withheld in a group room (privacy); a pointer line is appended.
     done=True: only the answered-nothing-needed chats; show_done=True: also list them after the waiting ones."""
     lang = lang or pick_lang("auto", rows)
     t = L[lang]
     human = sorted((r for r in rows if r["ball"] == "human"), key=lambda r: r["since"])
     waiting = [r for r in human if not is_done(r)]
-    finished = [r for r in human if is_done(r)]
+    finished = sorted((r for r in human if is_done(r)), key=lambda r: r["since"], reverse=True)  # latest first
     stalled = sorted((r for r in rows if is_stalled(r, promise_grace_min, now)
                       or is_quiet(r, working_timeout_min, now)), key=lambda r: r["since"])
     working = [r for r in rows if r["ball"] == "ai" and r not in stalled]
@@ -326,18 +385,28 @@ def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optiona
 
     def name(r):
         if not hide:
-            return display_name(r)
+            x = display_name(r)
+            if r.get("key", "").split(":")[1:2] == ["local"] and x.startswith("local"):
+                x = t["cli"] + x[len("local"):]  # only seen with show_local or from a local run
+            return f"**{x.replace('*', '')}**" if bold else x
         if r["key"] not in names:
             i = len(names)
             names[r["key"]] = t["chat"].format(c=chr(65 + i) if i < 26 else str(i + 1))
         return names[r["key"]]
 
+    def _age(r):
+        a = fmt_age(r["since"], now)
+        return zh_age(a) if t is L["zh"] else a
+
     tail = [t["hidden_here"].format(n=hidden)] if hidden else []
     if done:
         if not finished:
             return "\n".join([t["done_empty"]] + tail)
+        shown = finished if full else finished[:DONE_SHOWN]  # latest first, so the cut drops the oldest
+        more = [t["done_more"].format(n=len(finished) - len(shown))] if len(shown) < len(finished) else []
         return "\n".join([t["done_head"].format(n=len(finished))] +
-                         [f"{i}. {name(r)} · {fmt_age(r['since'], now)}" for i, r in enumerate(finished, 1)] + tail)
+                          [f"{i}. {name(r)} · {t['done_age'].format(age=_age(r))}"
+                           for i, r in enumerate(shown, 1)] + more + tail)
 
     out = [t["head"].format(n=len(waiting), s="" if len(waiting) == 1 else "s") if waiting else t["empty"]]
     shown = waiting if full else waiting[:TOP]
@@ -345,13 +414,18 @@ def render_board(rows: list[dict], now: Optional[datetime] = None, lang: Optiona
         out.append(f"{i}. {name(r)} · {fmt_age(r['since'], now)} — {short_note(r, lang)}")
     if len(waiting) > len(shown):
         out.append(t["more"].format(n=len(waiting) - len(shown)))
-    if stalled:
-        out.append(t["stall_line"].format(n=len(stalled), names=t["sep"].join(name(r) for r in stalled)))
+    if stalled:  # one numbered line each: names contain "·" and "/", so a comma-joined list was unreadable
+        out.append(t["stall_head"].format(n=len(stalled)))
+        st_shown = stalled if full else stalled[:TOP]
+        out.extend(f"{i}. {name(r)} · {fmt_age(r['since'], now)}" for i, r in enumerate(st_shown, 1))
+        if len(stalled) > len(st_shown):
+            out.append(t["stall_more"].format(n=len(stalled) - len(st_shown)))
     if working:
         out.append(t["work_line"].format(n=len(working)))
     if finished and show_done:
         out.append(t["done_head"].format(n=len(finished)))
-        out.extend(f"{i}. {name(r)} · {fmt_age(r['since'], now)}" for i, r in enumerate(finished, 1))
+        out.extend(f"{i}. {name(r)} · {t['done_age'].format(age=_age(r))}"
+                   for i, r in enumerate(finished, 1))
     elif finished:
         out.append(t["done_line"].format(n=len(finished)))
     if stale:
@@ -424,6 +498,43 @@ class Ball:
             return str(row[0]) if row and row[0] else ""
         except Exception:
             logger.debug("ball: state.db title lookup failed", exc_info=True)
+            return ""
+
+    def _with_titles(self, rows: list) -> list:
+        """Telegram DM topic rows stored before a title was known show only `thread #hash`. Look the
+        Hermes session title up by (chat_id, thread_id) — read-only, cached per thread — and use it
+        for display. Nothing is written back."""
+        cache = self.__dict__.setdefault("_titles", {})
+        out = []
+        for r in rows:
+            lab = r.get("label") or ""
+            parts = r.get("key", "").split(":")
+            local = len(parts) >= 3 and parts[1] == "local" and not lab  # CLI sessions: only `local · #hash`
+            if local or (_is_dm_topic(r.get("key", "")) and (not lab or "thread #" in lab)):
+                k = (":".join(parts[2:-1]) if local else parts[-2], None if local else parts[-1])
+                if k not in cache:
+                    cache[k] = self._title_by_thread(*k)
+                if cache[k]:
+                    r = dict(r, label=f"local · {_trunc(cache[k], 40)}" if local
+                             else f"{lab.split(' · ')[0] if lab else 'telegram'} · {_trunc(cache[k], 40)}")
+            out.append(r)
+        return out
+
+    def _title_by_thread(self, chat_id: str, thread_id: str) -> str:
+        p = self._state_db_path()
+        if not p.exists():
+            return ""
+        try:
+            con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=1)
+            try:
+                row = con.execute("SELECT title FROM sessions WHERE chat_id = ? AND COALESCE(thread_id, '') = ? "
+                                  "AND title IS NOT NULL AND title != '' ORDER BY started_at DESC LIMIT 1",
+                                  (chat_id, thread_id or "")).fetchone()
+            finally:
+                con.close()
+            return str(row[0]) if row and row[0] else ""
+        except Exception:
+            logger.debug("ball: state.db title-by-thread lookup failed", exc_info=True)
             return ""
 
     def _from_state_db(self, session_id) -> Optional[str]:
@@ -622,11 +733,11 @@ class Ball:
             err = " ".join(str(e).split())[:60] or type(e).__name__
             return L[lang if lang in ("zh", "en") else "en"]["read_fail"].format(err=err)
         fail = getattr(self.store, "write_failure", None)
-        if fail and out and sub in ("", "all", "board", "more", "done"):
+        if fail and out and sub in ("", "here", "all", "board", "more", "done"):
             lang = "zh" if has_cjk(out) else "en"
             out = L[lang]["write_fail"].format(t=fail[0].strftime("%H:%M"), err=fail[1]) + "\n" + out
         ofail = getattr(self, "origin_failure", None)
-        if ofail and out and sub in ("", "all", "board", "more", "done"):
+        if ofail and out and sub in ("", "here", "all", "board", "more", "done"):
             lang = "zh" if has_cjk(out) else "en"
             out = L[lang]["origin_fail"].format(t=ofail[0].strftime("%H:%M"), err=ofail[1]) + "\n" + out
         plat = source.get("platform") if isinstance(source, dict) else getattr(source, "platform", None)
@@ -657,8 +768,14 @@ class Ball:
                 return L[pick_lang(setting, self.store.all())]["nothread"]
             lang = pick_lang(setting, self.store.all(), self.store.get(here))
             return L[lang]["forgot"] if self.store.delete(here) else L[lang]["forgot_none"]
-        if sub in ("all", "board", "more", "done"):
-            all_rows = self.store.all()
+        if sub in ("", "all", "board", "more", "done"):  # bare /ball = the summary board; /ball here = this chat
+            all_rows = self._with_titles(self.store.all())
+            plat = source.get("platform") if isinstance(source, dict) else getattr(source, "platform", None)
+            plat = str(getattr(plat, "value", plat) or "").lower()
+            if plat != "local" and not self._cfg("show_local", False):
+                # platform 'local' = cron jobs / API / delegated runs on the host, not a chat you can answer;
+                # their asks already reach you through the job's own delivery. Keep them off chat boards.
+                all_rows = [r for r in all_rows if r.get("key", "").split(":")[1:2] != ["local"]]
             here_row = next((r for r in all_rows if r["key"] == here), None)
             hidden = 0
             if self._group_scoped(source):  # privacy: other rooms' labels/questions never shown in a group
@@ -666,11 +783,11 @@ class Ball:
                 all_rows = [here_row] if here_row else []
             stale_days = self._stale_days()
             rows, stale = split_stale(all_rows, stale_days)
-            return render_board(rows, lang=pick_lang(setting, all_rows, here_row), full=sub == "more", hide=hide,
+            return render_board(rows, lang=pick_lang(setting, all_rows, here_row), full=sub in ("all", "more") or (sub == "done" and "all" in words[1:]), hide=hide,
                                 done=sub == "done", show_done=sub == "more" and "all" in words[1:],
                                 stale=len(stale), stale_days=stale_days,
                                 working_timeout_min=self._working_timeout(),
-                                promise_grace_min=self._promise_grace(), hidden=hidden)
+                                promise_grace_min=self._promise_grace(), hidden=hidden, bold=True)
         if not here:
             return L[pick_lang(setting, self.store.all())]["nothread"]
         row = self.store.get(here)

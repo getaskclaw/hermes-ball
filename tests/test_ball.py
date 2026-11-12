@@ -325,7 +325,7 @@ def test_render_one():
     assert core.render_one({"ball": "ai", "since": _iso(5), "promise": "I'll check", "note": ""}, NOW) == \
         "⚠️ AI stalled · 5m\nsaid \u201cI'll check\u201d but went quiet · send \"go\" to nudge it"
     assert core.render_one({"ball": "human", "since": _iso(1), "promise": None, "note": "replied", "lang": "zh"},
-                           NOW) == "✅ 已答完 · 1m — 无需你处理"
+                           NOW) == "✅ 已答完 · 1m — 不用你回"
     assert "nothing tracked" in core.render_one(None).lower()
 
 
@@ -347,8 +347,9 @@ def test_board_top3_oldest_first():
         "1. Ball Demo 10 · 1h — 问题10？",
         "2. Ball Demo 9 · 1h — 问题9？",
         "3. Ball Demo 8 · 1h — 问题8？",
-        "…还有 7 个：!ball more",
-        "⚠️ 1 个 AI 卡住了：Ops — 去那里回 go",
+        "…还有 7 个：`!ball all`",
+        "⚠️ 1 个 AI 卡住了 — 去那里回 go",
+        "1. Ops · 30m",
         "🤖 1 个 AI 在干活",
     ]
     assert "(matrix)" not in out and "← here" not in out
@@ -358,15 +359,15 @@ def test_board_more_lists_all():
     out = core.render_board(_rows(), NOW, full=True)
     print("\n--- !ball more ---\n" + out)
     lines = out.splitlines()
-    assert sum(1 for l in lines if re.match(r"\d+\. ", l)) == 10 and "!ball more" not in out
-    assert lines[-3].startswith("10. Ball Demo 1 ·")
+    assert sum(1 for l in lines if re.match(r"\d+\. ", l)) == 11 and "!ball all" not in out
+    assert lines[-4].startswith("10. Ball Demo 1 ·")
 
 
 def test_board_hide_names():
     out = core.render_board(_rows(), NOW, hide=True)
     print("\n--- !ball all hide ---\n" + out)
     assert "Ball Demo" not in out and "Ops" not in out
-    assert "1. 对话 A · 1h — 问题10？" in out and "卡住了：对话 D" in out
+    assert "1. 对话 A · 1h — 问题10？" in out and "卡住了" in out and "对话 D" in out
     en = core.render_board([dict(r, lang="en", note="Which file?") for r in _rows()], NOW, hide=True, full=True)
     assert "1. Chat A · 1h — Which file?" in en
 
@@ -380,7 +381,7 @@ def test_board_empty_and_english():
     out = core.render_board(rows, NOW)
     print("\n--- !ball all (en) ---\n" + out)
     assert out.splitlines() == ["🏀 1 chat waiting on you", "1. Ball · 1h — Should I deploy main now?",
-                                "⚠️ 1 AI stalled: Ops — send \"go\" there"]
+                                "⚠️ 1 AI stalled — send \"go\" there", "1. Ops · 9m"]
 
 
 def test_board_legacy_long_notes_render_short():
@@ -391,17 +392,17 @@ def test_board_legacy_long_notes_render_short():
 
 
 def test_command_handler(env):
-    assert "nothing tracked" in env.ball.command("", source=SRC).lower()
+    assert "nothing tracked" in env.ball.command("here", source=SRC).lower()
     admit(env)
-    assert env.ball.command("", source=SRC).startswith("🤖 AI is working · ")
+    assert env.ball.command("here", source=SRC).startswith("🤖 AI is working · ")
     assert env.ball.command("all") == "✅ No chats waiting on you\n🤖 1 AI working"
-    assert "Not a chat" in env.ball.command("")
+    assert "Not a chat" in env.ball.command("here")
     admit(env, "你好")
-    assert env.ball.command("", source=SRC).startswith("🤖 AI 在干活 · ")
+    assert env.ball.command("here", source=SRC).startswith("🤖 AI 在干活 · ")
     assert env.ball.command("help").splitlines()[0] == "球在谁手里？— 告诉你哪些 AI 对话在等你。"
     dispatch(env)  # pre-dispatch hands Ball the session_store (post_llm_call resolves by session_id)
     env.ball.on_post_llm_call(session_id="sid-1", assistant_response="改好了。要我写进哪个文件？")
-    out = env.ball.command("", source=SRC)
+    out = env.ball.command("here", source=SRC)
     print("\n--- !ball ---\n" + out)
     assert out.endswith("\n它问你：要我写进哪个文件？")
     assert "对话 A" in env.ball.command("all hide") and "对话 A" in env.ball.command("more hide")
@@ -410,7 +411,7 @@ def test_command_handler(env):
 def test_language_config_forces(env):
     admit(env, "你好")
     env.ball.ctx.config["language"] = "en"
-    assert env.ball.command("", source=SRC).startswith("🤖 AI is working")
+    assert env.ball.command("here", source=SRC).startswith("🤖 AI is working")
 
 
 def test_note_stored_short(env):
@@ -449,8 +450,8 @@ def test_commands_do_not_move_ball(env, text):
 def test_bang_ball_reports_state_before_query(env):
     env.store.set(TKEY, "human", note="replied", since="2026-11-11T00:19:12+00:00")
     dispatch(env, "/ball")  # what the Matrix adapter turns `!ball` into
-    out = env.ball.command("", source=SRC, session_key=env.skey, session_id="sid-1")
-    assert out.startswith("✅ Done · ") and "nothing needed" in out and "you spoke" not in out
+    out = env.ball.command("here", source=SRC, session_key=env.skey, session_id="sid-1")
+    assert out.startswith("✅ Answered · ") and "nothing for you to do" in out and "you spoke" not in out
 
 
 def test_command_detection_is_strict():
@@ -504,7 +505,7 @@ def test_board_shows_label_not_raw_id(env):
     env.ball.on_post_gateway_admission(source=vars(src), text="hi")  # writes the row with its label
     env.store.set(core.thread_key(src), "human", note="Should I merge?")
     board = env.ball.command("all", source=src)
-    assert "1. Ball · " in board and "Should I merge?" in board
+    assert "1. **Ball** · " in board and "Should I merge?" in board
     assert "!YJ9Hide" not in board and "!room" not in board and "vesper:" not in board and "(matrix)" not in board
 
 
@@ -619,7 +620,7 @@ def test_board_waiting_vs_done_counts():
         "🏀 2 个对话在等你",
         "1. Ball Demo 2 · 25m — 问题2？",
         "2. Ball Demo 1 · 15m — 问题1？",
-        "💤 7 个已答完，无需你处理",
+        "💤 7 个已答完，不用你回",
     ]
     assert "Done 1" not in out and "已回复" not in out
 
@@ -632,39 +633,39 @@ def test_board_interrupted_still_waiting():
 
 def test_board_all_done_empty_waiting():
     out = core.render_board(_done_rows(7), NOW)
-    assert out.splitlines() == ["✅ 没有对话在等你", "💤 7 个已答完，无需你处理"]
+    assert out.splitlines() == ["✅ 没有对话在等你", "💤 7 个已答完，不用你回"]
     en = core.render_board([dict(r, lang="en") for r in _done_rows(7)], NOW)
-    assert en.splitlines() == ["✅ No chats waiting on you", "💤 7 done, nothing needed"]
+    assert en.splitlines() == ["✅ No chats waiting on you", "💤 7 answered — nothing for you to do"]
 
 
 def test_board_done_view_and_more_all():
     rows = _rows()[:1] + _done_rows(3)
     d = core.render_board(rows, NOW, done=True)
     print("\n--- !ball done ---\n" + d)
-    assert d.splitlines() == ["💤 3 个已答完，无需你处理", "1. Done 3 · 1h", "2. Done 2 · 1h", "3. Done 1 · 1h"]
+    assert d.splitlines() == ["💤 3 个已答完，不用你回", "1. Done 1 · 1小时前", "2. Done 2 · 1小时前", "3. Done 3 · 1小时前"]  # latest first
     assert core.render_board(_rows()[:1], NOW, done=True) == "💤 没有已答完的对话"
     m = core.render_board(rows, NOW, full=True, show_done=True).splitlines()
-    assert m[0] == "🏀 1 个对话在等你" and m[-4:] == d.splitlines() and "无需你处理" in m[-4]
+    assert m[0] == "🏀 1 个对话在等你" and m[-4:] == d.splitlines() and "不用你回" in m[-4]
     hid = core.render_board(rows, NOW, done=True, hide=True)
-    assert "Done" not in hid and "1. 对话 A · 1h" in hid
+    assert "Done" not in hid and "1. 对话 A · 1小时前" in hid
     hid2 = core.render_board(rows, NOW, hide=True)
     assert "Done" not in hid2 and "Ball Demo" not in hid2
 
 
 def test_single_replied_done_line():
     r = {"ball": "human", "since": _iso(8), "promise": None, "note": "replied"}
-    assert core.render_one(dict(r, lang="zh"), NOW) == "✅ 已答完 · 8m — 无需你处理"
-    assert core.render_one(dict(r, lang="en"), NOW) == "✅ Done · 8m — nothing needed"
+    assert core.render_one(dict(r, lang="zh"), NOW) == "✅ 已答完 · 8m — 不用你回"
+    assert core.render_one(dict(r, lang="en"), NOW) == "✅ Answered · 8m — nothing for you to do"
 
 
 def test_command_done_and_more_all(env):
     env.store.set(TKEY, "human", note="replied", label="Here (matrix)", lang="en")
     env.store.set("p:x:y:", "human", note="Which file?", label="Other (matrix)", lang="en")
     assert env.ball.command("all", source=SRC, session_key=env.skey, session_id="sid-1").splitlines() == [
-        "🏀 1 chat waiting on you", "1. Other · " + env.ball.command("all").splitlines()[1].split(" · ")[1],
-        "💤 1 done, nothing needed"]
+        "🏀 1 chat waiting on you", "1. **Other** · " + env.ball.command("all").splitlines()[1].split(" · ")[1],
+        "💤 1 answered — nothing for you to do"]
     assert env.ball.command("done", source=SRC, session_key=env.skey, session_id="sid-1").splitlines()[0] == \
-        "💤 1 done, nothing needed"
+        "💤 1 answered — nothing for you to do"
     assert "Here" in env.ball.command("more all", source=SRC, session_key=env.skey, session_id="sid-1")
     assert "Here" not in env.ball.command("more", source=SRC, session_key=env.skey, session_id="sid-1")
 
@@ -794,13 +795,13 @@ def test_old_working_row_renders_quiet(store):
     ball = bp.Ball(store, FakeCtx())
     ball.on_post_gateway_admission(source=vars(SRC), text="do the thing")
     k = core.thread_key(SRC)
-    assert "AI is working" in ball.command("", source=SRC)
+    assert "AI is working" in ball.command("here", source=SRC)
     _age_row(store, k, 45)
     before = store.get(k)
-    out = ball.command("", source=SRC)
+    out = ball.command("here", source=SRC)
     assert out == "⚠️ AI quiet 45m — may have stopped (restart?) · send \"go\" to nudge it"
     board = ball.command("all", source=SRC)
-    assert "⚠️ 1 AI stalled:" in board and "AI working" not in board
+    assert "⚠️ 1 AI stalled" in board and "AI working" not in board
     assert store.get(k) == before  # display only, no DB writes
 
 
@@ -808,9 +809,9 @@ def test_quiet_timeout_zero_off_and_zh(store):
     ball = bp.Ball(store, FakeCtx({"working_timeout_min": 0}))
     ball.on_post_gateway_admission(source=vars(SRC), text="开始吧")
     _age_row(store, core.thread_key(SRC), 600)
-    assert "AI 在干活" in ball.command("", source=SRC)
+    assert "AI 在干活" in ball.command("here", source=SRC)
     ball.ctx.config["working_timeout_min"] = 30
-    assert ball.command("", source=SRC).startswith("⚠️ AI 10h 没动静")
+    assert ball.command("here", source=SRC).startswith("⚠️ AI 10h 没动静")
     assert "1 个 AI 卡住了" in ball.command("all", source=SRC)
 
 
@@ -854,7 +855,7 @@ def test_write_failure_banner_logged_once_and_recovers(dbpath, caplog):
     flag["ro"] = False
     ball.on_post_gateway_admission(source=vars(SRC), text="back")
     assert store.write_failure is None
-    assert not ball.command("", source=SRC).startswith("⚠️ Ball")
+    assert not ball.command("here", source=SRC).startswith("⚠️ Ball")
 
 
 def test_write_failure_connect_raises_then_read_fails(store, dbpath):
@@ -862,7 +863,7 @@ def test_write_failure_connect_raises_then_read_fails(store, dbpath):
                    FakeCtx())
     assert ball.on_post_gateway_admission(source=vars(SRC), text="hi") is None
     assert ball.store.write_failure[1] == "database or disk is full"
-    out = ball.command("", source=SRC)
+    out = ball.command("here", source=SRC)
     assert out == "⚠️ Ball couldn't read its database (database or disk is full)"
 
 
@@ -870,7 +871,7 @@ def test_write_failure_banner_zh(store):
     ball = bp.Ball(store, FakeCtx({"language": "zh"}))
     ball.on_post_gateway_admission(source=vars(SRC), text="你好")
     store.write_failure = (datetime(2026, 1, 1, 9, 5, tzinfo=timezone.utc), "disk I/O error")
-    assert ball.command("", source=SRC).startswith("⚠️ Ball 自 09:05 UTC 起无法保存（disk I/O error，磁盘满了？）— 看板可能过时\n")
+    assert ball.command("here", source=SRC).startswith("⚠️ Ball 自 09:05 UTC 起无法保存（disk I/O error，磁盘满了？）— 看板可能过时\n")
 
 
 # ── courtesy closers are not asks ──
@@ -948,7 +949,7 @@ def test_group_board_hides_other_rooms(env, sub):
     a, _ = _two_rooms(env)
     out = env.ball.command(sub, source=a)
     assert "Secret plan" not in out and "R!b" not in out
-    assert "1 other chats hidden here — use !ball all in your DM" in out
+    assert "1 other chats hidden here — use `!ball all` in your DM" in out
     if sub in ("all", "more"):
         assert "Should I merge A?" in out
 
@@ -970,13 +971,13 @@ def test_board_in_groups_all_opt_out(env):
 def test_group_board_zh_hidden_line(env):
     a, _ = _two_rooms(env)
     env.ball.ctx = FakeCtx(config={"language": "zh"})
-    assert "🔒 这里隐藏了 1 个其他对话 — 在私聊里用 !ball all 查看" in env.ball.command("all", source=a)
+    assert "🔒 这里隐藏了 1 个其他对话 — 在私聊里用 `!ball all` 查看" in env.ball.command("all", source=a)
 
 
 def test_none_message_points_to_all():
     from ball_plugin.core import L
-    assert "!ball all" in L["en"]["none"] and "Hermes replies" in L["en"]["none"]
-    assert "!ball all" in L["zh"]["none"]
+    assert "send `!ball`" in L["en"]["none"] and "Hermes replies" in L["en"]["none"]
+    assert "发 `!ball`" in L["zh"]["none"]
 
 
 def test_japanese_is_not_chinese():
@@ -1090,7 +1091,133 @@ def test_topicless_thread_label_uses_hermes_title(store, _isolated_state_db):
                chat_name="AskClaw B3", user_name="AskClaw B3", chat_topic=None, user_id="9")
     b.on_post_gateway_admission(session_key="k-tg", source=src, text="hi")
     rows = store.all()
-    assert len(rows) == 1 and rows[0]["label"].endswith("· ~舰队全景图")
+    assert len(rows) == 1 and rows[0]["label"].endswith("· 舰队全景图")
     b.on_post_gateway_admission(session_key="k-tg", source=dict(src, chat_topic="Real Name"), text="hi")
     rows = store.all()
     assert len(rows) == 1 and rows[0]["label"].endswith("· Real Name")
+
+
+def test_title_hint_backticks_cannot_break_code_span():
+    src = SimpleNamespace(platform="telegram", chat_id="9", thread_id="1", profile=None, chat_type="dm",
+                          chat_name="B3", user_name="B3", chat_topic=None, user_id="9")
+    lab = sys.modules[bp.__name__ + ".core"].thread_label(src, "run `ls` now")
+    assert lab.endswith("· run `ls` now")
+
+
+def test_done_list_is_latest_first(store):
+    from datetime import datetime, timedelta, timezone
+    b = bp.Ball(store, FakeCtx())
+    now = datetime.now(timezone.utc)
+    for k, h in (("old", 5), ("new", 1)):
+        store.set(f"default:telegram:1:{k}", "human", note="replied", label=f"chat-{k}", state="replied",
+                  since=(now - timedelta(hours=h)).isoformat())
+    out = b.command("done")
+    assert out.index("chat-new") < out.index("chat-old")
+
+
+def test_done_view_caps_at_10_latest_with_hint():
+    rows = _done_rows(13)
+    d = core.render_board(rows, NOW, done=True).splitlines()
+    assert d[0] == "💤 13 个已答完，不用你回" and d[1].startswith("1. Done 1 ") and d[10].startswith("10. Done 10 ")
+    assert d[11] == "…还有 3 个更早的：`!ball done all`" and len(d) == 12
+    assert len(core.render_board(rows, NOW, done=True, full=True).splitlines()) == 14
+
+
+def test_board_names_bold_only_when_asked():
+    rows = _done_rows(1)
+    assert "**Done 1" in core.render_board(rows, NOW, done=True, bold=True)
+    assert "**" not in core.render_board(rows, NOW, done=True)
+    assert "**" not in core.render_board(rows, NOW, done=True, bold=True, hide=True)
+
+
+def test_dm_topic_drops_owner_prefix_groups_keep_it():
+    dm = {"key": "default:telegram:6534796624:276872", "label": "AskClaw B3 (telegram) · `show cfg`"}
+    grp = {"key": "default:telegram:-100123:5", "label": "Team (telegram) · Ops"}
+    plain = {"key": "default:telegram:6534796624:", "label": "DM AskClaw B3 (telegram)"}
+    assert core.display_name(dm) == "show cfg"
+    assert core.display_name(grp) == "Team · Ops"
+    assert core.display_name(plain) == "DM AskClaw B3"
+
+
+def test_paths_in_names_are_code_so_gateway_keeps_them():
+    row = {"key": "default:telegram:6534796624:276872", "label": "AskClaw B3 (telegram) · show ~/.hermes/config.yaml 1-20"}
+    assert core.display_name(row) == "show `~/.hermes/config.yaml` 1-20"
+    assert core.display_name({"key": "p:matrix:!r:", "label": "GPT speed & token ? (matrix)"}) == "GPT speed & token ?"
+
+
+def test_zh_age_words():
+    assert core.zh_age("13m") == "13分钟" and core.zh_age("2h") == "2小时" and core.zh_age("1d") == "1天"
+    assert core.zh_age("5s") == "5秒" and core.zh_age("?") == "?"
+
+
+def test_all_lists_every_waiting_chat(store):
+    b = bp.Ball(store, FakeCtx())
+    for i in range(6):
+        store.set(f"default:matrix:!r{i}:", "human", note=f"Q{i}?", label=f"Room {i} (matrix)", lang="en", state="asked")
+    out = b.command("all")
+    assert all(f"Room {i}" in out for i in range(6)) and "more:" not in out
+    assert b.command("more") == out
+
+
+def test_bare_ball_is_top3_summary_all_is_everything(store):
+    b = bp.Ball(store, FakeCtx())
+    for i in range(5):
+        store.set(f"default:matrix:!r{i}:", "human", note=f"Q{i}?", label=f"Room {i} (matrix)", lang="en", state="asked")
+    short = b.command("")
+    assert sum(1 for i in range(5) if f"Room {i}" in short) == 3 and "…2 more: `!ball all`" in short
+    assert all(f"Room {i}" in b.command("all") for i in range(5))
+
+
+def test_stalled_numbered_capped(store):
+    rows = [{"key": f"s{i}", "ball": "ai", "since": _iso(600), "promise": "I'll check", "note": "", "label": f"S/{i} · x"}
+            for i in range(5)]
+    out = core.render_board(rows, NOW).splitlines()
+    assert out[1].startswith("⚠️ 5 ") and out[2].startswith("1. S/") and out[5].startswith("…") and len(out) == 6
+
+
+def test_path_wrap_stops_at_chinese():
+    assert core._protect_paths("看 ~/a.yaml的内容") == "看 `~/a.yaml`的内容"
+
+
+def test_thread_hash_rows_get_title_by_thread(store, _isolated_state_db):
+    import sqlite3
+    con = sqlite3.connect(_isolated_state_db)
+    con.execute("CREATE TABLE sessions (id TEXT, chat_id TEXT, thread_id TEXT, title TEXT, started_at REAL)")
+    con.execute("INSERT INTO sessions VALUES ('s','6534796624','282512','舰队全景图',1)")
+    con.commit(); con.close()
+    store.set("default:telegram:6534796624:282512", "human", note="replied", label="AskClaw B3 (telegram) · thread #6396",
+              state="replied")
+    b = bp.Ball(store, FakeCtx())
+    assert "舰队全景图" in b.command("done") and "thread #" not in b.command("done")
+
+
+def test_hint_commands_are_code_spans():
+    assert core._code_cmds("…9 more: !ball all") == "…9 more: `!ball all`"
+    assert core._code_cmds("x `!ball` y") == "x `!ball` y"
+
+
+def test_instruction_ask_note_not_replied_sentinel():
+    v = sys.modules[bp.__name__ + ".judge"].heuristic("All set up. Reply go and I will dispatch the coder")
+    if v["state"] == "asked":
+        assert v["note"] != "replied"
+    row = {"key": "k", "ball": "human", "since": _iso(5), "promise": None, "note": "replied", "label": "X",
+           "lang": "en", "state": "asked"}
+    assert "waiting for your reply" in core.render_board([row], NOW)
+
+
+def test_lead_in_stripped():
+    assert core._strip_lead_in("下一步： 需你拍板") == "需你拍板"
+    assert core._strip_lead_in("Next step: pick one?") == "pick one?"
+    assert core._strip_lead_in("下一步") == "下一步"
+
+
+def test_local_rows_hidden_from_chat_boards(store):
+    b = bp.Ball(store, FakeCtx())
+    store.set("default:local:local-abc:", "human", note="Q?", lang="en", state="asked")
+    store.set("default:matrix:!r:", "human", note="Q2?", label="Room (matrix)", lang="en", state="asked")
+    tg = SimpleNamespace(platform="telegram", chat_id="1", thread_id=None, profile=None, chat_type="dm",
+                         chat_name=None, user_name="u", chat_topic=None, user_id="1")
+    out = b.command("all", source=tg)
+    assert "#" not in out.split("Room")[0] and "1 chat waiting" in out
+    b2 = bp.Ball(store, FakeCtx(config={"show_local": True}))
+    assert "2 chats waiting" in b2.command("all", source=tg) and "auto job" in b2.command("all", source=tg)
