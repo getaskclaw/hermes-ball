@@ -7,8 +7,8 @@ if __package__:  # Hermes loads this dir as a package; pytest's rootdir collecti
 
 __all__ = ["register", "Ball", "Store"]
 
-HOOKS = ("pre_gateway_dispatch", "post_llm_call", "on_human_input_request",
-         "on_human_input_resolved", "agent_loop_stopped")
+HOOKS = ("pre_gateway_dispatch", "post_gateway_admission", "post_llm_call",
+         "on_human_input_request", "on_human_input_resolved", "agent_loop_stopped")
 
 
 def register(ctx):

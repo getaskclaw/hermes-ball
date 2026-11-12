@@ -1,6 +1,7 @@
 """Ball state machine + hook/command handlers. Every entry point swallows exceptions."""
 from __future__ import annotations
 
+import contextvars
 import functools
 import hashlib
 import json
@@ -39,9 +40,20 @@ def _s(v: Any) -> str:
     return "" if v is None else str(v)
 
 
+def _hermes_home() -> Path:
+    """Profile-aware home: contextvar override (multiplex gateway) -> HERMES_HOME -> platform default.
+    A plain ``os.environ`` read returns the launch profile under a multiplex gateway, so profile-aware
+    paths must go through ``hermes_constants.get_hermes_home()``; the fallback keeps tests runnable
+    without hermes-agent installed."""
+    try:
+        from hermes_constants import get_hermes_home
+        return get_hermes_home()
+    except Exception:
+        return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+
+
 def default_profile() -> str:
-    home = os.environ.get("HERMES_HOME", "")
-    name = Path(home).name if home else ""
+    name = _hermes_home().name
     if name and name != ".hermes":
         return name
     return "default"
@@ -388,7 +400,7 @@ class Ball:
 
     @staticmethod
     def _state_db_path() -> Path:
-        return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "state.db"
+        return _hermes_home() / "state.db"
 
     def _from_state_db(self, session_id) -> Optional[str]:
         """Fallback when no live session_store maps ``session_id``: after a plugin hot-reload the new Ball
@@ -444,15 +456,26 @@ class Ball:
             # skips text starting with "/"). Rewrite to the canonical slash form so the prompt stays pending
             # and the command dispatches. State is untouched.
             return {"action": "rewrite", "text": "/ball" + (m.group(1) or "")}
-        if is_command(text):
-            # `/ball`, Matrix `!ball` (rewritten to `/ball` by the adapter) and every other slash/bang command
-            # are control traffic, not a conversational turn: they must not move the ball, so `/ball` reports
-            # the state as it was *before* the query.
-            return None
-        lang = ("zh" if has_cjk(text) else "en") if isinstance(text, str) and text.strip() else None
-        self.store.set(thread_key(source), "ai", note="you spoke", label=thread_label(source), lang=lang,
-                       state="working")
+        # This hook runs BEFORE authorization: anything beyond observing would let unauthorized
+        # senders write board rows. Board writes live in ``post_gateway_admission`` instead.
         return None  # never rewrite/skip the message
+
+    @safe
+    def on_post_gateway_admission(self, session_key=None, source=None, text=None, **_):
+        """Fires once per message that survived authorization — the safe place to mark 'you spoke'.
+        ``source`` arrives as a plain dict (``SessionSource.to_dict()``), so wrap it before the
+        getattr-based helpers or every field reads empty and all chats collapse to one row."""
+        if not isinstance(source, dict):
+            return None
+        src = SimpleNamespace(**source)
+        tkey = thread_key(src)
+        self._learn(tkey, session_key=session_key)
+        if is_command(text):
+            return None  # commands are control traffic — learn the mapping but never move the ball
+        lang = ("zh" if has_cjk(text) else "en") if isinstance(text, str) and text.strip() else None
+        self.store.set(tkey, "ai", note="you spoke", label=thread_label(src), lang=lang,
+                       state="working")
+        return None
 
     @safe
     def on_human_input_request(self, kind=None, prompt=None, session_key=None, session_id=None, **_):
@@ -493,8 +516,13 @@ class Ball:
         row = self.store.set(tkey, verdict["ball"], promise=verdict["promise"], note=verdict["note"],
                              state=verdict["state"])
         if self._cfg("llm_judge", False) and getattr(self.ctx, "llm", None) is not None:
-            t = threading.Thread(target=self._run_llm_judge, name="ball-judge", daemon=True,
-                                 args=(tkey, assistant_response or "", row["updated"], verdict))
+            # A plain Thread does not inherit contextvars: the profile-scope override
+            # (get_hermes_home()'s first answer under multiplexing) would be lost in the judge
+            # thread. Carry it explicitly — the same shape Hermes uses for executor hops.
+            cctx = contextvars.copy_context()
+            t = threading.Thread(target=lambda: cctx.run(self._run_llm_judge, tkey,
+                                 assistant_response or "", row["updated"], verdict),
+                                 name="ball-judge", daemon=True)
             t.start()
             return t  # return value of post_llm_call is ignored by Hermes; handy for tests
         return None

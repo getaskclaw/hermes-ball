@@ -76,6 +76,13 @@ def dispatch(env, text="hi"):
     return env.ball.on_pre_gateway_dispatch(event=NS(text=text, source=SRC), gateway=env.gw, session_store=env.ss)
 
 
+def admit(env, text="hi", source=None, session_key=None):
+    """Feed the post_gateway_admission hook the dict-shaped source Hermes passes (source.to_dict())."""
+    if source is None:
+        source = {k: v for k, v in vars(SRC).items() if v is not None}
+    return env.ball.on_post_gateway_admission(session_key=session_key or env.skey, source=source, text=text)
+
+
 # ── store ──
 def test_store_crud(store):
     assert store.get("k") is None
@@ -117,10 +124,40 @@ def test_store_concurrency(dbpath):
 
 
 # ── hooks ──
-def test_dispatch_sets_ai_and_returns_none(env):
+def test_dispatch_captures_store_and_writes_nothing(env):
+    """pre_gateway_dispatch runs pre-auth: it must never write board rows, only hand us the
+    session_store and (for bare `!ball`) rewrite the command."""
     assert dispatch(env) is None
-    assert env.store.get(TKEY)["ball"] == "ai"
+    assert env.store.all() == []
     assert env.ball._session_store is env.ss
+
+
+def test_admission_sets_ai_and_returns_none(env):
+    assert admit(env) is None
+    r = env.store.get(TKEY)
+    assert r["ball"] == "ai" and r["note"] == "you spoke" and r["state"] == "working"
+
+
+def test_admission_dict_source_matches_thread_key(env):
+    """The admission hook receives ``SessionSource.to_dict()`` — a plain dict. The thread key must
+    match what the pre-dispatch path computes on the SessionSource object, or a thread would split
+    into two rows."""
+    admit(env, "go", source=vars(SRC))
+    assert env.store.get(core.thread_key(SRC)) is not None
+    assert env.store.all()[0]["key"] == TKEY
+
+
+def test_admission_learns_session_key_even_for_commands(env):
+    assert admit(env, "/ball") is None
+    assert env.store.all() == []  # commands are control traffic: learned, not a turn
+    assert env.ball.by_session_key[env.skey] == TKEY
+    env.ball.on_agent_loop_stopped(session_key=env.skey, reason="/stop")  # resolves via the learned mapping
+    assert env.store.get(TKEY)["ball"] == "human"
+
+
+def test_admission_rejects_non_dict_source(env):
+    assert env.ball.on_post_gateway_admission(session_key=env.skey, source=SRC, text="hi") is None
+    assert env.store.all() == []
 
 
 def test_profile_fallback(env, monkeypatch):
@@ -229,7 +266,7 @@ def test_llm_judge_non_blocking_and_no_clobber(env):
     t0 = time.monotonic()
     t = _llm_env(env, llm)
     assert time.monotonic() - t0 < 0.3  # turn not blocked
-    dispatch(env, "next")  # user spoke meanwhile
+    admit(env, "next")  # user spoke meanwhile
     t.join(5)
     assert env.store.get(TKEY)["note"] == "you spoke"
 
@@ -354,13 +391,14 @@ def test_board_legacy_long_notes_render_short():
 
 def test_command_handler(env):
     assert "nothing tracked" in env.ball.command("", source=SRC).lower()
-    dispatch(env)
+    admit(env)
     assert env.ball.command("", source=SRC).startswith("🤖 AI is working · ")
     assert env.ball.command("all") == "✅ No chats waiting on you\n🤖 1 AI working"
     assert "Not a chat" in env.ball.command("")
-    dispatch(env, "你好")
+    admit(env, "你好")
     assert env.ball.command("", source=SRC).startswith("🤖 AI 在干活 · ")
     assert env.ball.command("help").splitlines()[0] == "球在谁手里？— 告诉你哪些 AI 对话在等你。"
+    dispatch(env)  # pre-dispatch hands Ball the session_store (post_llm_call resolves by session_id)
     env.ball.on_post_llm_call(session_id="sid-1", assistant_response="改好了。要我写进哪个文件？")
     out = env.ball.command("", source=SRC)
     print("\n--- !ball ---\n" + out)
@@ -369,12 +407,13 @@ def test_command_handler(env):
 
 
 def test_language_config_forces(env):
-    dispatch(env, "你好")
+    admit(env, "你好")
     env.ball.ctx.config["language"] = "en"
     assert env.ball.command("", source=SRC).startswith("🤖 AI is working")
 
 
 def test_note_stored_short(env):
+    admit(env)
     dispatch(env)
     env.ball.on_post_llm_call(session_id="sid-1", assistant_response="x" * 3000 + ". Which file?")
     assert env.store.get(TKEY)["note"] == "Which file?"
@@ -389,7 +428,7 @@ def test_register_matches_manifest(tmp_path):
     manifest = yaml.safe_load((bp.__file__ and __import__("pathlib").Path(bp.__file__).parent / "plugin.yaml").read_text())
     assert sorted(ctx.hooks) == sorted(manifest["provides_hooks"])
     assert list(ctx.commands) == ["ball"]
-    assert manifest["version"] == "0.1.2" and isinstance(manifest["version"], str)
+    assert manifest["version"] == "0.1.3" and isinstance(manifest["version"], str)
 
 
 # ── regressions: live bugs ──
@@ -421,15 +460,15 @@ def test_command_detection_is_strict():
 
 def test_plain_messages_still_move_ball(env):
     env.store.set(TKEY, "human", note="replied")
-    dispatch(env, "so?")
+    admit(env, "so?")
     assert env.store.get(TKEY)["ball"] == "ai"
 
 
 def test_same_holder_keeps_since_on_new_user_message(env):
     """Documented: since = when the ball last changed hands, not the latest message."""
-    dispatch(env, "first")
+    admit(env, "first")
     since = env.store.get(TKEY)["since"]
-    dispatch(env, "second")
+    admit(env, "second")
     r = env.store.get(TKEY)
     assert r["since"] == since and r["note"] == "you spoke"
 
@@ -460,7 +499,7 @@ def test_thread_label_sources():
 def test_board_shows_label_not_raw_id(env):
     src = NS(platform="matrix", chat_id="!YJ9Hide:srv", thread_id=None, profile=None, chat_name="Ball",
              chat_type="group")
-    env.ball.on_pre_gateway_dispatch(event=NS(text="hi", source=src), session_store=env.ss)
+    env.ball.on_post_gateway_admission(source=vars(src), text="hi")  # writes the row with its label
     env.store.set(core.thread_key(src), "human", note="Should I merge?")
     board = env.ball.command("all", source=src)
     assert "1. Ball · " in board and "Should I merge?" in board
@@ -751,7 +790,7 @@ def _age_row(store, key, minutes):
 
 def test_old_working_row_renders_quiet(store):
     ball = bp.Ball(store, FakeCtx())
-    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="do the thing"))
+    ball.on_post_gateway_admission(source=vars(SRC), text="do the thing")
     k = core.thread_key(SRC)
     assert "AI is working" in ball.command("", source=SRC)
     _age_row(store, k, 45)
@@ -765,7 +804,7 @@ def test_old_working_row_renders_quiet(store):
 
 def test_quiet_timeout_zero_off_and_zh(store):
     ball = bp.Ball(store, FakeCtx({"working_timeout_min": 0}))
-    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="开始吧"))
+    ball.on_post_gateway_admission(source=vars(SRC), text="开始吧")
     _age_row(store, core.thread_key(SRC), 600)
     assert "AI 在干活" in ball.command("", source=SRC)
     ball.ctx.config["working_timeout_min"] = 30
@@ -794,12 +833,12 @@ def test_write_failure_banner_logged_once_and_recovers(dbpath, caplog):
 
     store = bp.Store(connect)
     ball = bp.Ball(store, FakeCtx())
-    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="hi"))
+    ball.on_post_gateway_admission(source=vars(SRC), text="hi")
     store._conn.close(); store._conn = None
     flag["ro"] = True
     caplog.set_level("DEBUG", logger="hermes_plugins.ball")
     for _ in range(3):  # hooks never raise
-        assert ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="again")) is None
+        assert ball.on_post_gateway_admission(source=vars(SRC), text="again") is None
         assert ball.on_post_llm_call(session_id="x", assistant_response="done.") is None
     warns = [r for r in caplog.records if r.levelname == "WARNING" and "could not save" in r.getMessage()]
     assert len(warns) == 1
@@ -811,7 +850,7 @@ def test_write_failure_banner_logged_once_and_recovers(dbpath, caplog):
     assert "couldn't save" not in ball.command("help", source=SRC)
     store._conn.close(); store._conn = None
     flag["ro"] = False
-    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="back"))
+    ball.on_post_gateway_admission(source=vars(SRC), text="back")
     assert store.write_failure is None
     assert not ball.command("", source=SRC).startswith("⚠️ Ball")
 
@@ -819,7 +858,7 @@ def test_write_failure_banner_logged_once_and_recovers(dbpath, caplog):
 def test_write_failure_connect_raises_then_read_fails(store, dbpath):
     ball = bp.Ball(bp.Store(lambda: (_ for _ in ()).throw(sqlite3.OperationalError("database or disk is full"))),
                    FakeCtx())
-    assert ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="hi")) is None
+    assert ball.on_post_gateway_admission(source=vars(SRC), text="hi") is None
     assert ball.store.write_failure[1] == "database or disk is full"
     out = ball.command("", source=SRC)
     assert out == "⚠️ Ball couldn't read its database (database or disk is full)"
@@ -827,7 +866,7 @@ def test_write_failure_connect_raises_then_read_fails(store, dbpath):
 
 def test_write_failure_banner_zh(store):
     ball = bp.Ball(store, FakeCtx({"language": "zh"}))
-    ball.on_pre_gateway_dispatch(event=NS(source=SRC, text="你好"))
+    ball.on_post_gateway_admission(source=vars(SRC), text="你好")
     store.write_failure = (datetime(2026, 1, 1, 9, 5, tzinfo=timezone.utc), "disk I/O error")
     assert ball.command("", source=SRC).startswith("⚠️ Ball 自 09:05 UTC 起无法保存（disk I/O error，磁盘满了？）— 看板可能过时\n")
 
@@ -968,7 +1007,7 @@ def test_telegram_dm_topic_turn_end_after_hot_reload_maps_via_state_db(store, _i
     con.execute("INSERT INTO sessions VALUES ('sub-1','subagent',NULL)")
     con.commit(); con.close()
     old = bp.Ball(store, FakeCtx())
-    old.on_pre_gateway_dispatch(event=NS(text="run it", source=src), gateway=object(), session_store=None)
+    old.on_post_gateway_admission(source=vars(src), text="run it")
     assert store.get(tkey)["state"] == "working"
     fresh = bp.Ball(store, FakeCtx())  # hot reload: no session_store, no inbound since
     fresh.on_post_llm_call(session_id=sid, assistant_response="Done — the unit finished.")
@@ -986,3 +1025,43 @@ def test_state_db_schema_change_is_shown_not_silent(store, _isolated_state_db):
     b.on_post_llm_call(session_id="s-x", assistant_response="Done.")
     out = b.command("all")
     assert "can't read Hermes session origins" in out
+
+
+# ── multiplex profile awareness ──
+def test_hermes_home_follows_contextvar_override(monkeypatch):
+    """Multiplex gateways bind the profile via a contextvar, not os.environ: default_profile() and
+    the thread key must follow the override, not the launch profile."""
+    hc = pytest.importorskip("hermes_constants")
+    monkeypatch.setenv("HERMES_HOME", "/x/launch")
+    tok = hc.set_hermes_home_override("/x/profiles/coder")
+    try:
+        assert core._hermes_home().as_posix() == "/x/profiles/coder"
+        assert core.default_profile() == "coder"
+        assert core.thread_key(NS(platform="m", chat_id="c")) == "coder:m:c:"
+    finally:
+        hc.reset_hermes_home_override(tok)
+
+
+def test_llm_judge_thread_carries_profile_context(env):
+    """A plain Thread loses contextvars; the judge must run inside copy_context()."""
+    hc = pytest.importorskip("hermes_constants")
+    seen = []
+    orig = env.ball._run_llm_judge
+
+    def probe(*a, **kw):
+        seen.append(str(hc.get_hermes_home()))
+        return orig(*a, **kw)
+
+    env.ball._run_llm_judge = probe
+    env.ball.ctx = FakeCtx(config={"llm_judge": True},
+                           llm=FakeLlm('{"ball":"ai","promise":"x","note":"n"}'))
+    dispatch(env)
+    tok = hc.set_hermes_home_override("/x/profiles/coder")
+    try:
+        env.ball.on_post_llm_call(session_id="sid-1", assistant_response="Done.")
+    finally:
+        hc.reset_hermes_home_override(tok)
+    for t in threading.enumerate():
+        if t.name == "ball-judge":
+            t.join(5)
+    assert seen == ["/x/profiles/coder"]
