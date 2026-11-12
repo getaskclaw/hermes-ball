@@ -69,7 +69,7 @@ def _short_hash(v: str) -> str:
     return "#" + hashlib.sha1(v.encode("utf-8", "replace")).hexdigest()[:4]
 
 
-def thread_label(source) -> str:
+def thread_label(source, title_hint: str = "") -> str:
     """Human-readable name from public SessionSource fields; never the raw chat id.
 
     chat_name (room/channel/group display name) > DM (user_name or 'DM') > platform · #hash(chat_id).
@@ -89,7 +89,13 @@ def thread_label(source) -> str:
     if tid:
         # chat_topic is untrusted display text: collapse newlines/whitespace runs.
         topic = " ".join(_s(getattr(source, "chat_topic", None)).split())
-        label += f" · {_trunc(topic, 40)}" if topic else f" · thread {_short_hash(tid)}"
+        hint = " ".join(_s(title_hint).split())
+        if topic:
+            label += f" · {_trunc(topic, 40)}"
+        elif hint:  # "~" = Hermes' own session title, not the platform's topic name (which Hermes didn't supply)
+            label += f" · ~{_trunc(hint, 40)}"
+        else:
+            label += f" · thread {_short_hash(tid)}"
     return label
 
 
@@ -402,6 +408,24 @@ class Ball:
     def _state_db_path() -> Path:
         return _hermes_home() / "state.db"
 
+    def _title_from_state_db(self, session_key) -> str:
+        """Hermes' session title for a thread whose platform gave no topic name (Telegram DM topics arrive
+        with chat_topic=None). Read-only; any failure just means no hint."""
+        p = self._state_db_path()
+        if not session_key or not p.exists():
+            return ""
+        try:
+            con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=1)
+            try:
+                row = con.execute("SELECT title FROM sessions WHERE session_key = ? AND title IS NOT NULL "
+                                  "AND title != '' ORDER BY started_at DESC LIMIT 1", (str(session_key),)).fetchone()
+            finally:
+                con.close()
+            return str(row[0]) if row and row[0] else ""
+        except Exception:
+            logger.debug("ball: state.db title lookup failed", exc_info=True)
+            return ""
+
     def _from_state_db(self, session_id) -> Optional[str]:
         """Fallback when no live session_store maps ``session_id``: after a plugin hot-reload the new Ball
         has none until the next pre_gateway_dispatch, and Telegram turns woken by internal notifiers
@@ -473,7 +497,8 @@ class Ball:
         if is_command(text):
             return None  # commands are control traffic — learn the mapping but never move the ball
         lang = ("zh" if has_cjk(text) else "en") if isinstance(text, str) and text.strip() else None
-        self.store.set(tkey, "ai", note="you spoke", label=thread_label(src), lang=lang,
+        hint = self._title_from_state_db(session_key) if source.get("thread_id") and not source.get("chat_topic") else ""
+        self.store.set(tkey, "ai", note="you spoke", label=thread_label(src, hint), lang=lang,
                        state="working")
         return None
 
@@ -604,6 +629,10 @@ class Ball:
         if ofail and out and sub in ("", "all", "board", "more", "done"):
             lang = "zh" if has_cjk(out) else "en"
             out = L[lang]["origin_fail"].format(t=ofail[0].strftime("%H:%M"), err=ofail[1]) + "\n" + out
+        plat = source.get("platform") if isinstance(source, dict) else getattr(source, "platform", None)
+        plat = getattr(plat, "value", plat)
+        if out and plat is not None and str(plat).lower() != "matrix":
+            out = out.replace("!ball", "/ball")  # `!ball` is Matrix-only; elsewhere hints must name /ball
         return out
 
     def _command(self, words, source, session_id, session_key):

@@ -14,7 +14,7 @@ the AI is waiting for your reply. Answer one and it drops off the list.
   changes what the AI sees or says.
 - **Local.** No network calls by default. One small SQLite file.
 - **Used daily on Matrix and Telegram** (the author's own setup). Other platforms use the same Hermes hooks but
-  are untested. On Matrix the command is `!ball`; elsewhere it is `/ball`.
+  are untested. On Matrix the command is `!ball`; elsewhere it is `/ball`, and Ball's own hints use the right one. Telegram DM topics arrive without their topic name, so Ball shows Hermes' session title instead, marked with `~` (e.g. `· ~fleet map`).
 
 ## Install
 

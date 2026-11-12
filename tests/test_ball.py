@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import sys
 import re
 import sqlite3
@@ -1066,3 +1067,30 @@ def test_llm_judge_thread_carries_profile_context(env):
         if t.name == "ball-judge":
             t.join(5)
     assert seen == ["/x/profiles/coder"]
+
+
+def test_hints_use_slash_outside_matrix(store):
+    b = bp.Ball(store, FakeCtx())
+    tg = SimpleNamespace(platform="telegram", chat_id="1", thread_id=None, profile=None, chat_type="dm",
+                         chat_name=None, user_name="u", chat_topic=None, user_id="1")
+    mx = SimpleNamespace(**dict(vars(tg), platform="matrix"))
+    out_tg = b.command("help", source=tg)
+    assert "!ball" not in out_tg and "/ball all" in out_tg
+    assert "!ball all" in b.command("help", source=mx)
+
+
+def test_topicless_thread_label_uses_hermes_title(store, _isolated_state_db):
+    import sqlite3
+    con = sqlite3.connect(_isolated_state_db)
+    con.execute("CREATE TABLE sessions (id TEXT, session_key TEXT, title TEXT, started_at REAL, origin_json TEXT)")
+    con.execute("INSERT INTO sessions VALUES ('s1','k-tg','舰队全景图',1,NULL)")
+    con.commit(); con.close()
+    b = bp.Ball(store, FakeCtx())
+    src = dict(platform="telegram", chat_id="9", thread_id="282512", profile=None, chat_type="dm",
+               chat_name="AskClaw B3", user_name="AskClaw B3", chat_topic=None, user_id="9")
+    b.on_post_gateway_admission(session_key="k-tg", source=src, text="hi")
+    rows = store.all()
+    assert len(rows) == 1 and rows[0]["label"].endswith("· ~舰队全景图")
+    b.on_post_gateway_admission(session_key="k-tg", source=dict(src, chat_topic="Real Name"), text="hi")
+    rows = store.all()
+    assert len(rows) == 1 and rows[0]["label"].endswith("· Real Name")
